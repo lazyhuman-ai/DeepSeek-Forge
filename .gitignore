@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Secrets and local runtime state
+.env
+.env.*
+!.env.example
+.forge/
+.forge-*/
+
+# Build and test output
+dist/
+build/
+.build/
+.gradle/
+test-results/
+playwright-report/
+tests/tmp/
+*.tsbuildinfo
+*.log
+
+# Native package output
+apps/macos/ForgeAgentMac/dist/
+apps/macos/ForgeAgentMac/.build/
+apps/android/ForgeAgentAndroid/app/build/
+apps/android/ForgeAgentAndroid/build/
+apps/android/ForgeAgentAndroid/.gradle/
+
+# Local generated/demo artifacts
+human-evolution.html
+
+# Local research/reference snapshots, not part of the ForgeAgent release.
+claude-code/
+
+# OS/editor noise
+.DS_Store
+.vscode/
+.idea/

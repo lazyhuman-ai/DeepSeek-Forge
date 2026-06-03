@@ -1,0 +1,387 @@
+import AppKit
+import Foundation
+
+enum CoreServiceStatus: Equatable {
+    case starting
+    case ready
+    case degraded(String)
+    case restarting
+}
+
+struct AndroidPairingLink: Identifiable {
+    let id = UUID()
+    let baseUrl: String
+    let pairingUrl: String
+    let expiresAt: Date
+}
+
+@MainActor
+final class CoreServiceController: ObservableObject {
+    @Published var status: CoreServiceStatus = .starting
+    @Published var pairingLink: AndroidPairingLink?
+    @Published var isPairing = false
+    @Published var reloadNonce = UUID()
+    @Published private(set) var currentPort = 3000
+
+    let preferredPort = 3000
+    private var lateHealthRecoveryTask: Task<Void, Never>?
+
+    var consoleURL: URL {
+        URL(string: "http://127.0.0.1:\(currentPort)/")!
+    }
+
+    var logURL: URL {
+        supportDirectory.appendingPathComponent("forgeagent.log")
+    }
+
+    private var supportDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/ForgeAgent", isDirectory: true)
+    }
+
+    private var dataDirectory: URL {
+        supportDirectory.appendingPathComponent("data", isDirectory: true)
+    }
+
+    private var launchScriptURL: URL {
+        supportDirectory.appendingPathComponent("launchd-start.sh")
+    }
+
+    private var plistURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/com.forgeagent.gateway.plist")
+    }
+
+    func bootstrap() async {
+        status = .starting
+        lateHealthRecoveryTask?.cancel()
+        do {
+            if try await adoptHealthyExistingService() {
+                status = .ready
+                reloadNonce = UUID()
+                return
+            }
+
+            try installLaunchAgent()
+            if try await waitForHealth(timeout: 90) {
+                status = .ready
+                reloadNonce = UUID()
+            } else {
+                status = .degraded("ForgeAgent Core is still starting. The app will reconnect automatically; use Open Logs if it does not recover.")
+                startLateHealthRecovery()
+            }
+        } catch {
+            status = .degraded(error.localizedDescription)
+            startLateHealthRecovery()
+        }
+    }
+
+    func restartCore() async {
+        status = .restarting
+        lateHealthRecoveryTask?.cancel()
+        do {
+            try bootoutLaunchAgent()
+            try installLaunchAgent()
+            if try await waitForHealth(timeout: 90) {
+                status = .ready
+                reloadNonce = UUID()
+            } else {
+                status = .degraded("ForgeAgent Core is still restarting. The app will reconnect automatically; use Open Logs if it does not recover.")
+                startLateHealthRecovery()
+            }
+        } catch {
+            status = .degraded(error.localizedDescription)
+            startLateHealthRecovery()
+        }
+    }
+
+    func openConsoleInBrowser() {
+        NSWorkspace.shared.open(consoleURL)
+    }
+
+    func showLogs() {
+        NSWorkspace.shared.open(logURL)
+    }
+
+    func createAndroidPairingLink() async {
+        isPairing = true
+        defer { isPairing = false }
+        do {
+            if status != .ready {
+                await bootstrap()
+            }
+            let baseUrl = preferredLanBaseURL()
+            let issued = try await postPairingCode(baseUrl: baseUrl)
+            pairingLink = issued
+        } catch {
+            status = .degraded(error.localizedDescription)
+        }
+    }
+
+    private func waitForHealth(timeout: TimeInterval) async throws -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if try await healthReady() { return true }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+        return false
+    }
+
+    private func healthReady() async throws -> Bool {
+        if try await healthReady(port: currentPort) {
+            return true
+        }
+        if let statePort = readRunStatePort(), statePort != currentPort {
+            if try await healthReady(port: statePort) {
+                currentPort = statePort
+                return true
+            }
+        }
+        return false
+    }
+
+    private func healthReady(port: Int) async throws -> Bool {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/health")!)
+        request.timeoutInterval = 1.5
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            return false
+        }
+    }
+
+    private func adoptHealthyExistingService() async throws -> Bool {
+        let candidates = ([readRunStatePort(), currentPort, preferredPort, 3130, 3140, 3150].compactMap { $0 })
+            .reduce(into: [Int]()) { result, port in
+                if !result.contains(port) { result.append(port) }
+            }
+        for port in candidates {
+            if try await healthReady(port: port) {
+                currentPort = port
+                return true
+            }
+        }
+        return false
+    }
+
+    private func startLateHealthRecovery() {
+        lateHealthRecoveryTask?.cancel()
+        lateHealthRecoveryTask = Task { @MainActor [weak self] in
+            let deadline = Date().addingTimeInterval(180)
+            while !Task.isCancelled && Date() < deadline {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                if (try? await self.healthReady()) == true {
+                    self.status = .ready
+                    self.reloadNonce = UUID()
+                    return
+                }
+            }
+        }
+    }
+
+    private func installLaunchAgent() throws {
+        try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try bootoutLaunchAgent(allowFailure: true)
+        currentPort = chooseAvailablePort()
+        try writeLaunchScript()
+        try renderPlist().write(to: plistURL, atomically: true, encoding: .utf8)
+        _ = try run("/bin/launchctl", ["bootstrap", launchdDomain(), plistURL.path])
+        _ = try run("/bin/launchctl", ["kickstart", "-k", "\(launchdDomain())/com.forgeagent.gateway"], allowFailure: true)
+    }
+
+    private func bootoutLaunchAgent(allowFailure: Bool = true) throws {
+        _ = try run("/bin/launchctl", ["bootout", launchdDomain(), plistURL.path], allowFailure: allowFailure)
+    }
+
+    private func readRunStatePort() -> Int? {
+        let stateURL = dataDirectory.appendingPathComponent("run/gateway.json")
+        guard let data = try? Data(contentsOf: stateURL),
+              let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let app = parsed["app"] as? String,
+              app == "ForgeAgent",
+              let port = parsed["port"] as? Int else {
+            return nil
+        }
+        return port
+    }
+
+    private func writeLaunchScript() throws {
+        guard let coreRoot = resolveCoreRoot() else {
+            throw NSError(domain: "ForgeAgentMac", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Could not find bundled ForgeAgent Core resources."
+            ])
+        }
+        let node = resolveNodePath()
+        let tsx = coreRoot.appendingPathComponent("node_modules/tsx/dist/cli.mjs").path
+        let main = coreRoot.appendingPathComponent("src/gateways/http/main.ts").path
+        let script = """
+        #!/bin/zsh
+        set -e
+        export FORGE_DATA_DIR='\(shellQuote(dataDirectory.path))'
+        export HTTP_HOST='0.0.0.0'
+        export HTTP_PORT='\(currentPort)'
+        export HOME='\(shellQuote(FileManager.default.homeDirectoryForCurrentUser.path))'
+        export PATH='/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
+        cd '\(shellQuote(coreRoot.path))'
+        exec /usr/bin/caffeinate -i '\(shellQuote(node))' '\(shellQuote(tsx))' '\(shellQuote(main))'
+        """
+        try script.write(to: launchScriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launchScriptURL.path)
+    }
+
+    private func renderPlist() -> String {
+        """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>Label</key>
+          <string>com.forgeagent.gateway</string>
+          <key>ProgramArguments</key>
+          <array>
+            <string>/bin/zsh</string>
+            <string>\(xmlEscape(launchScriptURL.path))</string>
+          </array>
+          <key>RunAtLoad</key>
+          <true/>
+          <key>KeepAlive</key>
+          <true/>
+          <key>StandardOutPath</key>
+          <string>\(xmlEscape(logURL.path))</string>
+          <key>StandardErrorPath</key>
+          <string>\(xmlEscape(logURL.path))</string>
+        </dict>
+        </plist>
+        """
+    }
+
+    private func resolveCoreRoot() -> URL? {
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("ForgeAgentCore"),
+           FileManager.default.fileExists(atPath: bundled.appendingPathComponent("src/gateways/http/main.ts").path) {
+            return bundled
+        }
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        if FileManager.default.fileExists(atPath: cwd.appendingPathComponent("src/gateways/http/main.ts").path) {
+            return cwd
+        }
+        return nil
+    }
+
+    private func resolveNodePath() -> String {
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("node/bin/node"),
+           FileManager.default.isExecutableFile(atPath: bundled.path) {
+            return bundled.path
+        }
+        if let env = ProcessInfo.processInfo.environment["FORGE_NODE_BIN"], !env.isEmpty {
+            return env
+        }
+        for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return "/opt/homebrew/bin/node"
+    }
+
+    private func postPairingCode(baseUrl: String) async throws -> AndroidPairingLink {
+        let url = consoleURL.appendingPathComponent("auth/pairing-codes")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["baseUrl": baseUrl])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 201 else {
+            throw NSError(domain: "ForgeAgentMac", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: String(data: data, encoding: .utf8) ?? "Could not create pairing code."
+            ])
+        }
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let pairingUrl = json?["pairingUrl"] as? String else {
+            throw NSError(domain: "ForgeAgentMac", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: "ForgeAgent returned an invalid pairing response."
+            ])
+        }
+        let expiresAtText = json?["expiresAt"] as? String ?? ""
+        let expiresAt = ISO8601DateFormatter().date(from: expiresAtText) ?? Date().addingTimeInterval(300)
+        return AndroidPairingLink(baseUrl: baseUrl, pairingUrl: pairingUrl, expiresAt: expiresAt)
+    }
+
+    private func preferredLanBaseURL() -> String {
+        if let address = lanIPv4Addresses().first {
+            return "http://\(address):\(currentPort)"
+        }
+        return "http://\(Host.current().localizedName ?? "127.0.0.1"):\(currentPort)"
+    }
+
+    private func chooseAvailablePort() -> Int {
+        let candidates = [preferredPort, 3130, 3140, 3150] + Array(3001...3099)
+        return candidates.first(where: isPortAvailable) ?? preferredPort
+    }
+
+    private func isPortAvailable(_ port: Int) -> Bool {
+        let output = (try? run("/usr/sbin/lsof", ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN"], allowFailure: true)) ?? ""
+        return output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func lanIPv4Addresses() -> [String] {
+        var pointer: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&pointer) == 0, let first = pointer else { return [] }
+        defer { freeifaddrs(pointer) }
+        var result: [String] = []
+        var current: UnsafeMutablePointer<ifaddrs>? = first
+        while current != nil {
+            guard let interface = current?.pointee else { break }
+            current = interface.ifa_next
+            guard interface.ifa_addr.pointee.sa_family == UInt8(AF_INET) else { continue }
+            let flags = Int32(interface.ifa_flags)
+            guard (flags & IFF_UP) != 0, (flags & IFF_LOOPBACK) == 0 else { continue }
+            var addr = interface.ifa_addr.pointee
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let status = getnameinfo(&addr, socklen_t(interface.ifa_addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+            if status == 0 {
+                let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                result.append(String(decoding: bytes, as: UTF8.self))
+            }
+        }
+        return result.sorted()
+    }
+
+    private func run(_ executable: String, _ args: [String], allowFailure: Bool = false) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = args
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        process.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if process.terminationStatus != 0 && !allowFailure {
+            throw NSError(domain: "ForgeAgentMac", code: Int(process.terminationStatus), userInfo: [
+                NSLocalizedDescriptionKey: output.isEmpty ? "\(executable) failed." : output
+            ])
+        }
+        return output
+    }
+
+    private func launchdDomain() -> String {
+        "gui/\(getuid())"
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        value.replacingOccurrences(of: "'", with: "'\\''")
+    }
+
+    private func xmlEscape(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
+    }
+}
