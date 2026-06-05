@@ -3,6 +3,7 @@ import type {
   PermissionResponseEvent,
 } from "../streams/event-types.js";
 import type { ToolCapability, ToolDefinition } from "../tools/schemas.js";
+import type { PathSandbox } from "../sandbox/path-sandbox.js";
 import { getSensitivePathReason } from "../sandbox/path-sandbox.js";
 
 export type ToolRequestSource = {
@@ -66,6 +67,7 @@ export type ToolPolicyInput = {
   tool: ToolDefinition;
   args: Record<string, unknown>;
   source?: ToolRequestSource;
+  pathSandbox?: PathSandbox;
 };
 
 export type ToolPolicyDecision = {
@@ -157,47 +159,225 @@ function installInputFromArgs(args: Record<string, unknown>): Record<string, unk
     : args;
 }
 
-function normalizeCommand(command: string): string {
-  return command.trim().replace(/\s+/g, " ");
-}
-
-function isDangerousShellCommand(command: string): string | null {
-  const normalized = normalizeCommand(command).toLowerCase();
-  const patterns: Array<[RegExp, string]> = [
-    [/\brm\s+-(?:[a-z]*r[a-z]*f|[a-z]*f[a-z]*r)\b/, "recursive force deletion"],
-    [/\bsudo\b/, "privilege escalation"],
-    [/\b(?:chmod|chown)\b/, "permission or ownership changes"],
-    [/\b(?:dd|mkfs|diskutil)\b/, "disk mutation"],
-    [/\b(?:launchctl|security)\b/, "system service or credential access"],
-    [/\b(?:git\s+push|git\s+reset\s+--hard|git\s+clean\s+-[a-z]*f)/, "git history or destructive workspace mutation"],
-    [/\b(?:npm|pnpm|yarn|bun|pip|uv|brew)\s+(?:install|add|remove|uninstall|upgrade|update)\b/, "package installation or removal"],
-    [/\bnpx\b(?!\s+tsc\s+--noemit(?:\s|$))|\bbunx\b|\buvx\b/, "package runner execution"],
-    [/\b(?:curl|wget)\b.*\|\s*(?:sh|bash|zsh|python|node)\b/, "downloaded code execution"],
-    [/\b(?:ssh|scp|rsync)\b/, "remote shell or file transfer"],
-  ];
-  for (const [pattern, reason] of patterns) {
-    if (pattern.test(normalized)) return reason;
-  }
-  return null;
-}
-
-function isCommonSafeShellCommand(command: string): boolean {
-  const normalized = normalizeCommand(command).toLowerCase();
-  if (/^echo\b(?!.*[>|])/.test(normalized)) return true;
-  if (/^(?:pwd|date|whoami|id|uname|hostname)(?:\s|$)/.test(normalized)) return true;
-  if (/^(?:ls|find|fd|rg|grep|cat|head|tail|wc|du|df|file|stat)(?:\s|$)/.test(normalized)) return true;
-  if (/^git\s+(?:status|log|diff|show|branch|tag|remote|rev-parse|ls-files|grep|blame|describe)(?:\s|$)/.test(normalized)) return true;
-  if (/^(?:npm|pnpm|yarn|bun)\s+(?:test|run\s+(?:test|typecheck|check|build|lint|format))(?:\s|$)/.test(normalized)) return true;
-  if (/^npx\s+tsc\s+--noemit(?:\s|$)/.test(normalized)) return true;
-  return false;
-}
-
 function extensionInstallNeedsApproval(args: Record<string, unknown>): string | null {
   const input = installInputFromArgs(args);
   const kind = firstString(input, ["kind"]);
   const enable = boolFromArgs(input, "enable") === true;
   if ((kind === "mcp_server" || kind === "mcp_catalog") && enable) {
     return "Enabling an MCP server can launch a local process or connect to a remote service.";
+  }
+  return null;
+}
+
+function isPureFilesystemWrite(capabilities: ToolCapability[]): boolean {
+  return capabilities.length === 1 && capabilities[0] === "fs.write";
+}
+
+type ShellToken =
+  | { type: "word"; value: string }
+  | { type: "op"; value: "&&" | ";" | "|" };
+
+const SAFE_BASH_COMMANDS = new Set([
+  "pwd",
+  "cd",
+  "ls",
+  "find",
+  "fd",
+  "tree",
+  "cat",
+  "head",
+  "tail",
+  "wc",
+  "grep",
+  "rg",
+  "sort",
+  "uniq",
+  "cut",
+  "date",
+  "whoami",
+  "uname",
+  "true",
+  "false",
+]);
+
+const SAFE_GIT_SUBCOMMANDS = new Set([
+  "status",
+  "diff",
+  "log",
+  "show",
+  "branch",
+  "rev-parse",
+  "ls-files",
+  "grep",
+  "blame",
+  "remote",
+]);
+
+const FIND_WRITE_OPTIONS = new Set([
+  "-delete",
+  "-exec",
+  "-execdir",
+  "-ok",
+  "-okdir",
+  "-fls",
+  "-fprint",
+  "-fprint0",
+]);
+
+const PACKAGE_MANAGER_COMMANDS = new Set(["npm", "pnpm", "yarn", "bun"]);
+const SAFE_PACKAGE_SCRIPTS = new Set(["typecheck", "check", "build", "lint", "format", "test"]);
+
+function tokenizeShellCommand(command: string): ShellToken[] | null {
+  const tokens: ShellToken[] = [];
+  let current = "";
+  let quote: "'" | "\"" | null = null;
+
+  const pushWord = (): void => {
+    if (current) {
+      tokens.push({ type: "word", value: current });
+      current = "";
+    }
+  };
+
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i]!;
+    const next = command[i + 1];
+
+    if (!quote && (char === "\n" || char === "\r" || char === "`" || char === "<" || char === ">")) {
+      return null;
+    }
+    if (!quote && char === "$" && next === "(") return null;
+    if (!quote && char === "\\") {
+      if (next === undefined) return null;
+      current += next;
+      i++;
+      continue;
+    }
+    if (quote && char === quote) {
+      quote = null;
+      continue;
+    }
+    if (!quote && (char === "'" || char === "\"")) {
+      quote = char;
+      continue;
+    }
+    if (!quote && /\s/.test(char)) {
+      pushWord();
+      continue;
+    }
+    if (!quote && char === "&") {
+      if (next !== "&") return null;
+      pushWord();
+      tokens.push({ type: "op", value: "&&" });
+      i++;
+      continue;
+    }
+    if (!quote && char === "|") {
+      if (next === "|") return null;
+      pushWord();
+      tokens.push({ type: "op", value: "|" });
+      continue;
+    }
+    if (!quote && char === ";") {
+      pushWord();
+      tokens.push({ type: "op", value: ";" });
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (quote) return null;
+  pushWord();
+  return tokens.length > 0 ? tokens : null;
+}
+
+function splitShellSegments(tokens: ShellToken[]): string[][] | null {
+  const segments: string[][] = [];
+  let current: string[] = [];
+  for (const token of tokens) {
+    if (token.type === "word") {
+      current.push(token.value);
+      continue;
+    }
+    if (current.length === 0) return null;
+    segments.push(current);
+    current = [];
+  }
+  if (current.length === 0) return null;
+  segments.push(current);
+  return segments;
+}
+
+function hasBlockedShellExpansion(words: string[]): boolean {
+  return words.some((word) => word.includes("$") || word.startsWith("~"));
+}
+
+function pathTokenAllowed(input: ToolPolicyInput, token: string): boolean {
+  if (token.startsWith("-")) return true;
+  if (getSensitivePathReason(token)) return false;
+  if (!input.pathSandbox) return false;
+  return input.pathSandbox.resolvePath(token, "read", input.tool.name, "process.exec").ok;
+}
+
+function commandPathsAllowed(input: ToolPolicyInput, words: string[]): boolean {
+  return words.every((word) => pathTokenAllowed(input, word));
+}
+
+function safePackageManagerCommand(words: string[]): boolean {
+  const command = words[0];
+  if (!command || !PACKAGE_MANAGER_COMMANDS.has(command)) return false;
+  return words.length === 3 && words[1] === "run" && SAFE_PACKAGE_SCRIPTS.has(words[2]!);
+}
+
+function safeNpxCommand(words: string[]): boolean {
+  return words.length === 3 && words[0] === "npx" && words[1] === "tsc" && words[2] === "--noEmit";
+}
+
+function safeGitCommand(input: ToolPolicyInput, words: string[]): boolean {
+  const subcommand = words[1];
+  if (!subcommand || !SAFE_GIT_SUBCOMMANDS.has(subcommand)) return false;
+  const args = words.slice(2);
+  if (subcommand === "remote" && args.some((word) => word !== "-v")) {
+    return false;
+  }
+  return commandPathsAllowed(input, args);
+}
+
+function safeBashSegment(input: ToolPolicyInput, words: string[]): boolean {
+  if (words.length === 0 || hasBlockedShellExpansion(words)) return false;
+  const command = words[0]!;
+  if (command.includes("/")) return false;
+  if (command === "echo") return true;
+  if (safePackageManagerCommand(words) || safeNpxCommand(words)) return true;
+  if (command === "git") return safeGitCommand(input, words);
+  if (!SAFE_BASH_COMMANDS.has(command)) return false;
+  if (command === "find" && words.some((word) => FIND_WRITE_OPTIONS.has(word))) return false;
+  if (command === "rg" && words.some((word) => word === "--pre" || word.startsWith("--pre="))) {
+    return false;
+  }
+  return commandPathsAllowed(input, words.slice(1));
+}
+
+function safeBashCommandReason(input: ToolPolicyInput): string | null {
+  if (input.tool.name !== "bash") return null;
+  if (input.args.run_in_background === true) return null;
+  const command = firstString(input.args, ["command"]);
+  if (!command) return null;
+  const tokens = tokenizeShellCommand(command);
+  if (!tokens) return null;
+  const segments = splitShellSegments(tokens);
+  if (!segments) return null;
+  if (!segments.every((segment) => safeBashSegment(input, segment))) return null;
+  return "Read-only shell inspection commands inside the workspace are allowed by default policy.";
+}
+
+function bashPackageInstallReason(input: ToolPolicyInput): string | null {
+  if (input.tool.name !== "bash") return null;
+  const command = firstString(input.args, ["command"]);
+  if (!command) return null;
+  if (/\b(?:npm|pnpm|yarn|bun|pip|uv|brew)\s+(?:install|add|remove|uninstall|upgrade|update)\b/i.test(command)) {
+    return "This shell command involves package installation or removal.";
   }
   return null;
 }
@@ -308,6 +488,43 @@ export class ToolPolicyManager {
           reason: sensitive,
         };
       }
+
+      if (isPureFilesystemWrite(capabilities) && input.pathSandbox) {
+        const resolved = input.pathSandbox.resolvePath(
+          requestedPath,
+          "write",
+          input.tool.name,
+          "fs.write",
+        );
+        if (resolved.ok) {
+          return {
+            decision: "allow",
+            action,
+            subject,
+            reason: "Filesystem writes inside the allowed workspace roots are allowed by default policy.",
+          };
+        }
+      }
+    }
+
+    const safeBashReason = safeBashCommandReason(input);
+    if (safeBashReason) {
+      return {
+        decision: "allow",
+        action,
+        subject,
+        reason: safeBashReason,
+      };
+    }
+
+    const packageInstallReason = bashPackageInstallReason(input);
+    if (packageInstallReason) {
+      return {
+        decision: "ask",
+        action,
+        subject,
+        reason: packageInstallReason,
+      };
     }
 
     if (input.tool.name === "extension_install") {
@@ -346,33 +563,6 @@ export class ToolPolicyManager {
       };
     }
 
-    if (input.tool.name === "bash") {
-      const command = firstString(input.args, ["command"]) ?? "";
-      const dangerous = isDangerousShellCommand(command);
-      if (dangerous) {
-        return {
-          decision: "ask",
-          action,
-          subject,
-          reason: `This shell command involves ${dangerous}.`,
-        };
-      }
-      if (isCommonSafeShellCommand(command)) {
-        return {
-          decision: "allow",
-          action,
-          subject,
-          reason: "Common read-only, build, or test shell command is allowed by default policy.",
-        };
-      }
-      return {
-        decision: "ask",
-        action,
-        subject,
-        reason: "This shell command is not recognized as a low-risk read/build/test command.",
-      };
-    }
-
     if (
       input.tool.isReadOnly === true &&
       capabilities.every((capability) => READ_CAPABILITIES.has(capability) || capability === "network.http")
@@ -386,6 +576,22 @@ export class ToolPolicyManager {
     }
 
     if (input.tool.name === "write_file" || input.tool.name === "edit_file") {
+      if (requestedPath && input.pathSandbox) {
+        const resolved = input.pathSandbox.resolvePath(
+          requestedPath,
+          "write",
+          input.tool.name,
+          "fs.write",
+        );
+        if (!resolved.ok) {
+          return {
+            decision: "ask",
+            action,
+            subject,
+            reason: resolved.message,
+          };
+        }
+      }
       return {
         decision: "allow",
         action,

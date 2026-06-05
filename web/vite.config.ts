@@ -17,6 +17,7 @@ export default defineConfig({
       "/device-state": "http://127.0.0.1:3000",
       "/projects": "http://127.0.0.1:3000",
       "/sessions": "http://127.0.0.1:3000",
+      "/terminal": "http://127.0.0.1:3000",
       "/events": "http://127.0.0.1:3000",
       "/system-events": "http://127.0.0.1:3000",
       "/permission-requests": "http://127.0.0.1:3000",
