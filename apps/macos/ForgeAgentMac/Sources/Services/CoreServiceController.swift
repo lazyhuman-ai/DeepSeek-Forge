@@ -131,6 +131,12 @@ final class CoreServiceController: ObservableObject {
         guard let statePort = readRunStatePort() else {
             return false
         }
+        guard launchScriptUsesPowerHelper() else {
+            return false
+        }
+        guard launchAgentIsRunning() else {
+            return false
+        }
         if try await healthReady(port: statePort) {
             currentPort = statePort
             return true
@@ -159,6 +165,7 @@ final class CoreServiceController: ObservableObject {
         try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: plistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try bootoutLaunchAgent(allowFailure: true)
+        terminateStaleBundledCoreProcesses()
         currentPort = chooseAvailablePort()
         try writeLaunchScript()
         try renderPlist().write(to: plistURL, atomically: true, encoding: .utf8)
@@ -182,6 +189,39 @@ final class CoreServiceController: ObservableObject {
         return port
     }
 
+    private func launchScriptUsesPowerHelper() -> Bool {
+        guard let content = try? String(contentsOf: launchScriptURL, encoding: .utf8) else {
+            return false
+        }
+        return content.contains("ForgeAgentPowerHelper")
+    }
+
+    private func launchAgentIsRunning() -> Bool {
+        let output = (try? run("/bin/launchctl", ["print", "\(launchdDomain())/com.forgeagent.gateway"], allowFailure: true)) ?? ""
+        return output.contains("state = running") && output.contains("pid =")
+    }
+
+    private func terminateStaleBundledCoreProcesses() {
+        let marker = "ForgeAgent.app/Contents/Resources/ForgeAgentCore/src/gateways/http/main.ts"
+        let output = (try? run("/usr/bin/pgrep", ["-f", marker], allowFailure: true)) ?? ""
+        let pids = output
+            .split(whereSeparator: \.isNewline)
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .filter { $0 > 0 && $0 != getpid() }
+
+        guard !pids.isEmpty else {
+            return
+        }
+
+        for pid in pids {
+            kill(pid, SIGTERM)
+        }
+        Thread.sleep(forTimeInterval: 1.0)
+        for pid in pids where kill(pid, 0) == 0 {
+            kill(pid, SIGKILL)
+        }
+    }
+
     private func writeLaunchScript() throws {
         guard let coreRoot = resolveCoreRoot() else {
             throw NSError(domain: "ForgeAgentMac", code: 1, userInfo: [
@@ -189,8 +229,19 @@ final class CoreServiceController: ObservableObject {
             ])
         }
         let node = resolveNodePath()
+        let powerHelper = resolvePowerHelperPath()
         let tsx = coreRoot.appendingPathComponent("node_modules/tsx/dist/cli.mjs").path
         let main = coreRoot.appendingPathComponent("src/gateways/http/main.ts").path
+        let launchCommand: String
+        if let powerHelper {
+            launchCommand = """
+            exec '\(shellQuote(powerHelper))' --working-directory '\(shellQuote(coreRoot.path))' -- '\(shellQuote(node))' '\(shellQuote(tsx))' '\(shellQuote(main))'
+            """
+        } else {
+            launchCommand = """
+            exec '\(shellQuote(node))' '\(shellQuote(tsx))' '\(shellQuote(main))'
+            """
+        }
         let script = """
         #!/bin/zsh
         set -e
@@ -200,7 +251,7 @@ final class CoreServiceController: ObservableObject {
         export HOME='\(shellQuote(FileManager.default.homeDirectoryForCurrentUser.path))'
         export PATH='/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
         cd '\(shellQuote(coreRoot.path))'
-        exec /usr/bin/caffeinate -i '\(shellQuote(node))' '\(shellQuote(tsx))' '\(shellQuote(main))'
+        \(launchCommand)
         """
         try script.write(to: launchScriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launchScriptURL.path)
@@ -240,6 +291,14 @@ final class CoreServiceController: ObservableObject {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         if FileManager.default.fileExists(atPath: cwd.appendingPathComponent("src/gateways/http/main.ts").path) {
             return cwd
+        }
+        return nil
+    }
+
+    private func resolvePowerHelperPath() -> String? {
+        if let bundled = Bundle.main.resourceURL?.appendingPathComponent("ForgeAgentPowerHelper"),
+           FileManager.default.isExecutableFile(atPath: bundled.path) {
+            return bundled.path
         }
         return nil
     }

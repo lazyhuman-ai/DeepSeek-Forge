@@ -31,11 +31,12 @@ LaunchAgent using:
 - data directory: `~/Library/Application Support/ForgeAgent/data`
 - host: `0.0.0.0`
 - port: `3000`
-- idle sleep prevention: `caffeinate -i`
+- idle sleep prevention: bundled `ForgeAgentPowerHelper`
 
-The app window can close while Core keeps running in the background. Display
-sleep is fine; real system sleep, lid-close sleep, network loss, or power loss
-will still interrupt remote Android operation.
+The app window can close while Core keeps running in the background. The helper
+uses a native macOS idle-system-sleep assertion, so the display may sleep while
+Core remains online for remote devices. Real system sleep, lid-close sleep,
+network loss, or power loss will still interrupt remote Android operation.
 
 ## User Flow
 

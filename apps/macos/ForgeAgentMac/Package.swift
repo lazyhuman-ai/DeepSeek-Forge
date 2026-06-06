@@ -8,12 +8,17 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .executable(name: "ForgeAgentMac", targets: ["ForgeAgentMac"])
+        .executable(name: "ForgeAgentMac", targets: ["ForgeAgentMac"]),
+        .executable(name: "ForgeAgentPowerHelper", targets: ["ForgeAgentPowerHelper"])
     ],
     targets: [
         .executableTarget(
             name: "ForgeAgentMac",
             path: "Sources"
+        ),
+        .executableTarget(
+            name: "ForgeAgentPowerHelper",
+            path: "PowerHelper"
         )
     ]
 )

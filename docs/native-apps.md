@@ -20,8 +20,9 @@ open apps/macos/ForgeAgentMac/dist/ForgeAgent.app
 The app listens on `0.0.0.0:3000` for private-network device access, while all
 business APIs still require device authentication. Core uses
 `~/Library/Application Support/ForgeAgent/data` by default. LaunchAgent uses
-`caffeinate -i` so display sleep does not stop remote operation; actual system
-sleep still stops network access.
+a bundled `ForgeAgentPowerHelper` with a native macOS idle-system-sleep
+assertion, so display sleep does not stop remote operation; actual system sleep
+still stops network access.
 
 ## Android
 
