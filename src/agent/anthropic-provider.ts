@@ -74,7 +74,7 @@ export class AnthropicProvider implements ModelProvider {
   async generate(
     messages: ModelMessage[],
     tools?: ToolDefinition[],
-    callbacks?: { onToken?: (token: string) => void; signal?: AbortSignal },
+    callbacks?: { onToken?: (token: string) => void; onStatus?: (message: string) => void; signal?: AbortSignal },
   ): Promise<ModelResponse> {
     throwIfAborted(callbacks?.signal);
     const systemMessages = messages.filter((m) => m.role === "system");
@@ -120,6 +120,14 @@ export class AnthropicProvider implements ModelProvider {
 
     const retryOptions: RetryOptions = { ...this.#retryOptions };
     if (callbacks?.signal) retryOptions.signal = callbacks.signal;
+    if (callbacks?.onStatus) {
+      retryOptions.onRetry = (event) => {
+        callbacks.onStatus?.(
+          `Model request failed (${event.reason}); retrying in ${Math.ceil(event.delayMs / 1000)}s ` +
+          `(${event.attempt}/${event.maxRetries}).`,
+        );
+      };
+    }
 
     const resp = await fetchWithRetry(
       `${this.#baseUrl}/anthropic/v1/messages`,

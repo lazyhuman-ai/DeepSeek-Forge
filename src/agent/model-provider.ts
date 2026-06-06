@@ -55,6 +55,7 @@ export interface ModelProvider {
     tools?: ToolDefinition[],
     callbacks?: {
       onToken?: (token: string) => void;
+      onStatus?: (message: string) => void;
       signal?: AbortSignal;
     },
   ): Promise<ModelResponse>;

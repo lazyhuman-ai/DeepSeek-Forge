@@ -177,6 +177,97 @@ test.describe("ForgeAgent Web Console", () => {
     await expect(page.locator(".inline-error")).toHaveCount(0);
   });
 
+  test("reconciles a running session to blocked when SSE misses the provider failure event", async ({ page }) => {
+    await ensureToken(page);
+    const sessionId = "sse-missed-running";
+    const timestamp = new Date().toISOString();
+    let sessionsRequestCount = 0;
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+
+    await page.route("**/events?**", async (route) => {
+      await route.abort();
+    });
+    await page.route("**/sessions?projectId=**", async (route) => {
+      sessionsRequestCount += 1;
+      const blocked = sessionsRequestCount >= 2;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: sessionId,
+            title: "Polling recovery",
+            status: blocked ? "blocked" : "running",
+            muted: false,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            projectId: "project-for-polling",
+            workspacePath: "/tmp/forgeagent-e2e",
+            activeBranchId: "main",
+            latestSeq: blocked ? 2 : 1,
+            latestAgentResultSeq: blocked ? 2 : 0,
+            unread: blocked,
+          },
+        ]),
+      });
+    });
+    await page.route(`**/sessions/${sessionId}/branches`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          activeBranchId: "main",
+          branches: [{ id: "main", title: "Original", createdAt: timestamp, updatedAt: timestamp }],
+          variantGroups: [],
+        }),
+      });
+    });
+    await page.route(`**/sessions/${sessionId}/usage`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ sessionId, records: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, cost: 0 }),
+      });
+    });
+    await page.route(`**/sessions/${sessionId}/thread?**`, async (route) => {
+      const url = new URL(route.request().url());
+      const afterSeq = Number(url.searchParams.get("afterSeq") ?? 0);
+      const events = afterSeq > 0
+        ? [{
+            type: "runtime_event",
+            seq: 2,
+            timestamp,
+            sessionId,
+            branchId: "main",
+            runtimeKind: "model_provider",
+            detail: "failed",
+            message: "Session blocked: fetch failed",
+          }]
+        : [{
+            type: "user_message",
+            seq: 1,
+            timestamp,
+            sessionId,
+            branchId: "main",
+            text: "你是谁",
+          }];
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(events),
+      });
+    });
+
+    await page.reload();
+    await expect(page.locator(".session-strip", { hasText: "Polling recovery" })).toBeVisible();
+    await expect(page.locator(".session-strip")).toContainText("running");
+    await expect.poll(() => sessionsRequestCount, { timeout: 6_000 }).toBeGreaterThan(1);
+    await expect(page.getByText("Session blocked: fetch failed")).toBeVisible({ timeout: 8_000 });
+    await expect(page.locator(".session-strip")).toContainText("blocked");
+    expect(pageErrors).toEqual([]);
+  });
+
   test("grows composer up to 60 percent of the viewport then scrolls internally", async ({ page }) => {
     await ensureToken(page);
     const textarea = page.locator(".composer textarea");
@@ -399,6 +490,122 @@ test.describe("ForgeAgent Web Console", () => {
     await expect(page.locator(".pair-qr")).toBeVisible();
     const pairingLink = page.locator(".pair-field textarea");
     await expect(pairingLink).toHaveValue(/forgeagent:\/\/pair\?baseUrl=/);
+  });
+
+  test("opens Pair Mobile without blanking when network URL metadata is from an older Core", async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.route("**/remote-access", async (route) => {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Unknown ForgeAgent API route." }),
+      });
+    });
+    await ensureToken(page);
+    await page.route("**/network-urls", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          localUrl: "http://127.0.0.1:3000",
+          lanUrls: ["http://192.168.4.20:3000"],
+          preferredUrl: "http://192.168.4.20:3000",
+        }),
+      });
+    });
+
+    await page.getByRole("button", { name: "Pair Mobile" }).click();
+    await expect(page.locator(".status-drawer")).toBeVisible();
+    await expect(page.locator(".remote-access-card")).toContainText("Local network pairing is ready");
+    await page.getByRole("tab", { name: "Android" }).click();
+    await expect(page.locator(".pair-qr")).toBeVisible();
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("classifies Tailscale URLs from older Core LAN fields as remote-ready", async ({ page }) => {
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.route("**/remote-access", async (route) => {
+      await route.fulfill({
+        status: 404,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Unknown ForgeAgent API route." }),
+      });
+    });
+    await ensureToken(page);
+    await page.route("**/network-urls", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          localUrl: "http://127.0.0.1:3000",
+          lanUrls: ["http://100.78.191.46:3000"],
+          preferredUrl: "http://100.78.191.46:3000",
+        }),
+      });
+    });
+
+    await page.getByRole("button", { name: "Pair Mobile" }).click();
+    await expect(page.locator(".status-drawer")).toBeVisible();
+    await expect(page.locator(".remote-access-card")).toContainText("Remote access is ready");
+    await expect(page.locator(".remote-access-card")).toContainText("Tailscale ready");
+    await expect(page.locator(".remote-access-card")).toContainText("1 address");
+    await page.getByRole("tab", { name: "Android" }).click();
+    await expect(page.locator(".pair-qr")).toBeVisible();
+    await expect(page.locator(".html-preview-error")).toHaveCount(0);
+    expect(pageErrors).toEqual([]);
+  });
+
+  test("lets users optimize Tailscale routing from Pair Mobile", async ({ page }) => {
+    let optimized = false;
+    await page.route(/.*\/remote-access.*/, async (route) => {
+      if (route.request().method() === "POST" && route.request().url().includes("/tailscale/optimize")) {
+        optimized = true;
+      }
+      const body = JSON.stringify({
+        coreId: "forge-core-test",
+        desktopName: "Forge Test Mac",
+        app: "ForgeAgent",
+        version: "0.1.0",
+        protocolVersion: 1,
+        networkUrls: {
+          localUrl: "http://127.0.0.1:3000",
+          lanUrls: [],
+          tailnetUrls: ["http://100.78.191.46:3000"],
+          remoteUrls: [],
+          recommendedRemoteUrl: "http://100.78.191.46:3000",
+          preferredUrl: "http://100.78.191.46:3000",
+          remoteAccessStatus: "tailscale_ready",
+        },
+        tailscale: {
+          installed: true,
+          running: true,
+          optimized,
+          needsOptimization: !optimized,
+          canOptimize: true,
+          tailscaleIps: ["100.78.191.46"],
+          health: [],
+          prefs: {
+            acceptDns: !optimized,
+            acceptRoutes: !optimized,
+            corpDns: !optimized,
+            routeAll: !optimized,
+          },
+          message: optimized
+            ? "Tailscale remote access is optimized for ForgeAgent."
+            : "Tailscale is currently allowed to manage DNS or routes.",
+        },
+      });
+      await route.fulfill({ status: 200, contentType: "application/json", body });
+    });
+    await ensureToken(page);
+
+    await page.getByRole("button", { name: "Pair Mobile" }).click();
+    await expect(page.locator(".remote-access-card")).toContainText("needs optimization");
+    await page.getByRole("button", { name: "Optimize Tailscale for ForgeAgent" }).click();
+    await expect(page.locator(".remote-access-card")).toContainText("optimized");
+    await expect(page.getByRole("button", { name: "Optimize Tailscale for ForgeAgent" })).toHaveCount(0);
   });
 
   test("opens the extension manager and discovers built-in MCP catalog entries", async ({ page }) => {

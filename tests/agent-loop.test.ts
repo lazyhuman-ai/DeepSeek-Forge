@@ -67,6 +67,75 @@ describe("AgentLoop", () => {
     expect(thread[1]!.type).toBe("assistant_message");
   });
 
+  it("persists and emits provider retry status while the turn is still running", async () => {
+    const runtimeEvents: unknown[] = [];
+    const provider: ModelProvider = {
+      generate: vi.fn().mockImplementation(async (
+        _msgs: ModelMessage[],
+        _tools: unknown,
+        callbacks?: { onStatus?: (message: string) => void },
+      ) => {
+        callbacks?.onStatus?.("DeepSeek request failed (fetch failed); retrying in 1s (1/3).");
+        return { text: "Recovered", finishReason: "stop" } satisfies ModelResponse;
+      }),
+    };
+    const executor = makeExecutor([]);
+    const loop = new AgentLoop(provider, executor, store, nextSeq, now, {
+      onRuntimeEvent: (_sessionId, event) => runtimeEvents.push(event),
+    });
+
+    store.append(sid, { type: "user_message", seq: 1, timestamp: ts, sessionId: sid, text: "hi" });
+
+    const result = await loop.runTurn(sid);
+    expect(result.outcome).toBe("turn_finished");
+
+    const thread = store.getThread(sid);
+    expect(thread.map((event) => event.type)).toEqual(["user_message", "runtime_event", "assistant_message"]);
+    expect(thread[1]).toMatchObject({
+      type: "runtime_event",
+      runtimeKind: "model_provider",
+      detail: "degraded",
+      message: "DeepSeek request failed (fetch failed); retrying in 1s (1/3).",
+    });
+    expect(runtimeEvents).toEqual([thread[1]]);
+  });
+
+  it("emits a waiting status when the provider is quiet before the first token", async () => {
+    vi.useFakeTimers();
+    const runtimeEvents: unknown[] = [];
+    let resolveGenerate!: (response: ModelResponse) => void;
+    const provider: ModelProvider = {
+      generate: vi.fn().mockImplementation(() => new Promise<ModelResponse>((resolve) => {
+        resolveGenerate = resolve;
+      })),
+    };
+    const executor = makeExecutor([]);
+    const loop = new AgentLoop(provider, executor, store, nextSeq, now, {
+      signal: new AbortController().signal,
+      onRuntimeEvent: (_sessionId, event) => runtimeEvents.push(event),
+    });
+
+    store.append(sid, { type: "user_message", seq: 1, timestamp: ts, sessionId: sid, text: "hi" });
+
+    try {
+      const turn = loop.runTurn(sid);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(store.getThread(sid)[1]).toMatchObject({
+        type: "runtime_event",
+        runtimeKind: "model_provider",
+        detail: "degraded",
+        message: "Waiting for model provider response; no content has arrived for 15s (notice 1).",
+      });
+      expect(runtimeEvents).toEqual([store.getThread(sid)[1]]);
+
+      resolveGenerate({ text: "done", finishReason: "stop" });
+      const result = await turn;
+      expect(result.outcome).toBe("turn_finished");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("handles tool calls and completes after tool results", async () => {
     const responses: ModelResponse[] = [
       { text: "", finishReason: "tool_calls", toolCalls: [{ id: "tc1", name: "read", args: { path: "/x" } }] },

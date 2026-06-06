@@ -8,18 +8,9 @@ enum CoreServiceStatus: Equatable {
     case restarting
 }
 
-struct AndroidPairingLink: Identifiable {
-    let id = UUID()
-    let baseUrl: String
-    let pairingUrl: String
-    let expiresAt: Date
-}
-
 @MainActor
 final class CoreServiceController: ObservableObject {
     @Published var status: CoreServiceStatus = .starting
-    @Published var pairingLink: AndroidPairingLink?
-    @Published var isPairing = false
     @Published var reloadNonce = UUID()
     @Published private(set) var currentPort = 3000
 
@@ -103,21 +94,6 @@ final class CoreServiceController: ObservableObject {
         NSWorkspace.shared.open(logURL)
     }
 
-    func createAndroidPairingLink() async {
-        isPairing = true
-        defer { isPairing = false }
-        do {
-            if status != .ready {
-                await bootstrap()
-            }
-            let baseUrl = preferredLanBaseURL()
-            let issued = try await postPairingCode(baseUrl: baseUrl)
-            pairingLink = issued
-        } catch {
-            status = .degraded(error.localizedDescription)
-        }
-    }
-
     private func waitForHealth(timeout: TimeInterval) async throws -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -152,15 +128,12 @@ final class CoreServiceController: ObservableObject {
     }
 
     private func adoptHealthyExistingService() async throws -> Bool {
-        let candidates = ([readRunStatePort(), currentPort, preferredPort, 3130, 3140, 3150].compactMap { $0 })
-            .reduce(into: [Int]()) { result, port in
-                if !result.contains(port) { result.append(port) }
-            }
-        for port in candidates {
-            if try await healthReady(port: port) {
-                currentPort = port
-                return true
-            }
+        guard let statePort = readRunStatePort() else {
+            return false
+        }
+        if try await healthReady(port: statePort) {
+            currentPort = statePort
+            return true
         }
         return false
     }
@@ -305,36 +278,6 @@ final class CoreServiceController: ObservableObject {
         }
     }
 
-    private func postPairingCode(baseUrl: String) async throws -> AndroidPairingLink {
-        let url = consoleURL.appendingPathComponent("auth/pairing-codes")
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["baseUrl": baseUrl])
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 201 else {
-            throw NSError(domain: "ForgeAgentMac", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: String(data: data, encoding: .utf8) ?? "Could not create pairing code."
-            ])
-        }
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        guard let pairingUrl = json?["pairingUrl"] as? String else {
-            throw NSError(domain: "ForgeAgentMac", code: 3, userInfo: [
-                NSLocalizedDescriptionKey: "ForgeAgent returned an invalid pairing response."
-            ])
-        }
-        let expiresAtText = json?["expiresAt"] as? String ?? ""
-        let expiresAt = ISO8601DateFormatter().date(from: expiresAtText) ?? Date().addingTimeInterval(300)
-        return AndroidPairingLink(baseUrl: baseUrl, pairingUrl: pairingUrl, expiresAt: expiresAt)
-    }
-
-    private func preferredLanBaseURL() -> String {
-        if let address = lanIPv4Addresses().first {
-            return "http://\(address):\(currentPort)"
-        }
-        return "http://\(Host.current().localizedName ?? "127.0.0.1"):\(currentPort)"
-    }
-
     private func chooseAvailablePort() -> Int {
         let candidates = [preferredPort, 3130, 3140, 3150] + Array(3001...3099)
         return candidates.first(where: isPortAvailable) ?? preferredPort
@@ -343,29 +286,6 @@ final class CoreServiceController: ObservableObject {
     private func isPortAvailable(_ port: Int) -> Bool {
         let output = (try? run("/usr/sbin/lsof", ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN"], allowFailure: true)) ?? ""
         return output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func lanIPv4Addresses() -> [String] {
-        var pointer: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&pointer) == 0, let first = pointer else { return [] }
-        defer { freeifaddrs(pointer) }
-        var result: [String] = []
-        var current: UnsafeMutablePointer<ifaddrs>? = first
-        while current != nil {
-            guard let interface = current?.pointee else { break }
-            current = interface.ifa_next
-            guard interface.ifa_addr.pointee.sa_family == UInt8(AF_INET) else { continue }
-            let flags = Int32(interface.ifa_flags)
-            guard (flags & IFF_UP) != 0, (flags & IFF_LOOPBACK) == 0 else { continue }
-            var addr = interface.ifa_addr.pointee
-            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            let status = getnameinfo(&addr, socklen_t(interface.ifa_addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
-            if status == 0 {
-                let bytes = host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-                result.append(String(decoding: bytes, as: UTF8.self))
-            }
-        }
-        return result.sorted()
     }
 
     private func run(_ executable: String, _ args: [String], allowFailure: Bool = false) throws -> String {

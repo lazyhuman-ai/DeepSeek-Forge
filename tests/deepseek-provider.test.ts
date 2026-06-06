@@ -102,4 +102,38 @@ describe("DeepSeekProvider", () => {
     expect(JSON.stringify(body.messages)).not.toContain("reasoning_content");
     expect(JSON.stringify(body.messages)).not.toContain("do not resend");
   });
+
+  it("reports retry status through callbacks", async () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error("fetch failed"))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const statuses: string[] = [];
+    const provider = new DeepSeekProvider({
+      baseUrl: "https://deepseek.test",
+      apiKey: "k",
+      model: "m",
+      maxRetries: 1,
+    });
+    const response = await provider.generate(
+      [{ role: "user", content: "hello" }],
+      undefined,
+      { onStatus: (message) => statuses.push(message) },
+    );
+
+    expect(response.text).toBe("ok");
+    expect(statuses).toEqual([
+      "DeepSeek request failed (fetch failed); retrying in 1s (1/1).",
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    randomSpy.mockRestore();
+  });
 });

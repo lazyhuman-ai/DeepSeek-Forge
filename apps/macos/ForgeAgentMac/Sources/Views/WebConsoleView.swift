@@ -49,6 +49,12 @@ struct WebConsoleView: NSViewRepresentable {
                     name: .forgeSelectSession,
                     object: nil
                 )
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(openRemoteAccess),
+                    name: .forgeOpenRemoteAccess,
+                    object: nil
+                )
             }
         }
 
@@ -77,7 +83,7 @@ struct WebConsoleView: NSViewRepresentable {
             _ webView: WKWebView,
             runJavaScriptAlertPanelWithMessage message: String,
             initiatedByFrame frame: WKFrameInfo,
-            completionHandler: @escaping @MainActor @Sendable () -> Void
+            completionHandler: @escaping @Sendable () -> Void
         ) {
             let alert = NSAlert()
             alert.messageText = "ForgeAgent"
@@ -93,7 +99,7 @@ struct WebConsoleView: NSViewRepresentable {
             _ webView: WKWebView,
             runJavaScriptConfirmPanelWithMessage message: String,
             initiatedByFrame frame: WKFrameInfo,
-            completionHandler: @escaping @MainActor @Sendable (Bool) -> Void
+            completionHandler: @escaping @Sendable (Bool) -> Void
         ) {
             let alert = NSAlert()
             alert.messageText = "ForgeAgent"
@@ -165,6 +171,10 @@ struct WebConsoleView: NSViewRepresentable {
             openSession(sessionId)
         }
 
+        @objc private func openRemoteAccess() {
+            openRail("android")
+        }
+
         private func openSession(_ sessionId: String) {
             guard
                 let webView,
@@ -172,6 +182,17 @@ struct WebConsoleView: NSViewRepresentable {
                 var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
             else { return }
             components.queryItems = [URLQueryItem(name: "selectSessionId", value: sessionId)]
+            guard let url = components.url else { return }
+            webView.load(URLRequest(url: url))
+        }
+
+        private func openRail(_ panel: String) {
+            guard
+                let webView,
+                let baseURL,
+                var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+            else { return }
+            components.queryItems = [URLQueryItem(name: "rail", value: panel)]
             guard let url = components.url else { return }
             webView.load(URLRequest(url: url))
         }

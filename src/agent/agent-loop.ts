@@ -5,11 +5,12 @@ import type {
   ContextUsageEvent,
   ToolCall,
   ToolResult,
+  RuntimeEvent,
   SessionEvent,
 } from "../streams/event-types.js";
 import { SessionThreadStore } from "../streams/session-thread-store.js";
 import { buildContext } from "./context-window-builder.js";
-import type { ModelMessage, ModelProvider, ModelUsage } from "./model-provider.js";
+import type { ModelMessage, ModelProvider, ModelResponse, ModelUsage } from "./model-provider.js";
 import type { ToolExecutor, ToolExecutionContext } from "./tool-executor.js";
 import type { ToolDefinition } from "../tools/schemas.js";
 import { compact } from "./compactor.js";
@@ -225,6 +226,7 @@ export class AgentLoop {
     isError: boolean;
     toolUseId: string;
   }) => void) | undefined;
+  #onRuntimeEvent: ((sessionId: string, event: RuntimeEvent) => void) | undefined;
   #signal: AbortSignal | undefined;
   #toolExecutionContext: Omit<ToolExecutionContext, "signal" | "toolUseId"> | undefined;
   #branchId: string | undefined;
@@ -259,6 +261,7 @@ export class AgentLoop {
         isError: boolean;
         toolUseId: string;
       }) => void;
+      onRuntimeEvent?: (sessionId: string, event: RuntimeEvent) => void;
       signal?: AbortSignal;
       toolExecutionContext?: Omit<ToolExecutionContext, "signal" | "toolUseId">;
       branchId?: string;
@@ -291,6 +294,7 @@ export class AgentLoop {
       ?? DEFAULT_ARTIFACT_PER_TURN_BUDGET_CHARS;
     this.#onDelta = options?.onDelta;
     this.#onToolResult = options?.onToolResult;
+    this.#onRuntimeEvent = options?.onRuntimeEvent;
     this.#signal = options?.signal;
     this.#toolExecutionContext = options?.toolExecutionContext;
     this.#branchId = options?.branchId;
@@ -312,14 +316,33 @@ export class AgentLoop {
       }
 
       const callbacks:
-        | { onToken?: (token: string) => void; signal?: AbortSignal }
+        | { onToken?: (token: string) => void; onStatus?: (message: string) => void; signal?: AbortSignal }
         | undefined = this.#onDelta || this.#signal
+          || this.#onRuntimeEvent
           ? {}
           : undefined;
+      let lastProviderActivityAt = Date.now();
+      const emitProviderStatus = (message: string): void => {
+        if (this.#signal?.aborted) return;
+        lastProviderActivityAt = Date.now();
+        const event: RuntimeEvent = {
+          type: "runtime_event",
+          seq: this.#nextSeq(),
+          timestamp: this.#now(),
+          sessionId,
+          ...(this.#branchId ? { branchId: this.#branchId } : {}),
+          runtimeKind: "model_provider",
+          detail: "degraded",
+          message,
+        };
+        this.#threadStore.append(sessionId, event);
+        this.#onRuntimeEvent?.(sessionId, event);
+      };
       if (callbacks && this.#signal) callbacks.signal = this.#signal;
       if (callbacks && this.#onDelta) {
         callbacks.onToken = (token) => {
           if (this.#signal?.aborted) return;
+          lastProviderActivityAt = Date.now();
           this.#onDelta!(sessionId, {
             type: "assistant_delta",
             seq: this.#nextSeq(),
@@ -330,15 +353,37 @@ export class AgentLoop {
           });
         };
       }
+      if (callbacks) {
+        callbacks.onStatus = emitProviderStatus;
+      }
 
-      const response = await raceAbort(
-        this.#modelProvider.generate(
-          messages,
-          this.#tools.length > 0 ? this.#tools : undefined,
-          callbacks,
-        ),
-        this.#signal,
-      );
+      let waitNoticeCount = 0;
+      const waitNoticeTimer = callbacks
+        ? setInterval(() => {
+            if (this.#signal?.aborted) return;
+            const quietForMs = Date.now() - lastProviderActivityAt;
+            if (quietForMs < 15_000) return;
+            waitNoticeCount += 1;
+            emitProviderStatus(
+              `Waiting for model provider response; no content has arrived for ${Math.round(quietForMs / 1000)}s ` +
+              `(notice ${waitNoticeCount}).`,
+            );
+          }, 5_000)
+        : undefined;
+
+      let response: ModelResponse;
+      try {
+        response = await raceAbort(
+          this.#modelProvider.generate(
+            messages,
+            this.#tools.length > 0 ? this.#tools : undefined,
+            callbacks,
+          ),
+          this.#signal,
+        );
+      } finally {
+        if (waitNoticeTimer !== undefined) clearInterval(waitNoticeTimer);
+      }
       throwIfAborted(this.#signal);
 
       if (response.finishReason === "stop") {

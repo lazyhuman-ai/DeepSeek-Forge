@@ -81,14 +81,17 @@ open apps/macos/ForgeAgentMac/dist/ForgeAgent.app
 
 iOS 端不需要 App Store 安装。ForgeAgent Core 仍运行在 Mac 上，iPhone/iPad 通过 Safari 连接同一套 Web Console。
 
-1. 确保 Mac 和 iPhone/iPad 在同一 Wi-Fi，或都连接到同一 Tailscale、ZeroTier、可信内网/tunnel。
+1. 推荐先在 Mac 和 iPhone/iPad 上安装免费的 Tailscale，并登录同一个 tailnet。只在家里 Wi-Fi 使用时可以跳过。
 2. 在 Mac 的 Web Console 右侧状态栏打开 **Pair Mobile**，切换到 **iPhone**。
-3. 用 iPhone/iPad 相机扫描二维码。二维码会打开 Safari，并自动完成一次性配对。
+3. 如果 ForgeAgent 检测到 Tailscale 地址，二维码会默认使用 Tailscale URL；否则会使用当前局域网 URL。
+4. 用 iPhone/iPad 相机扫描二维码。二维码会打开 Safari，并自动完成一次性配对。
 
-4. 如果没有扫码，手动在 iPhone/iPad 的 Safari 打开 **Gateway URL**，通常类似：
+如果没有扫码，手动在 iPhone/iPad 的 Safari 打开 **Gateway URL**，通常类似：
 
 ```text
 http://192.168.x.x:3000
+# 或者离开家也能用的 Tailscale 地址：
+http://100.x.y.z:3000
 ```
 
 5. 手动打开时如果看到 pairing 页面，在 Mac 的 **Pair Mobile > iPhone** 面板复制 **iPhone pairing code fallback**，填到 iPhone 页面完成配对。
@@ -98,7 +101,7 @@ http://192.168.x.x:3000
 iOS 使用说明：
 
 - Mac 必须保持 ForgeAgent Core 运行，并且不能睡眠或断网。
-- iPhone/iPad 访问的是 Mac 的私网地址，不经过 App Store。
+- iPhone/iPad 访问的是 Mac 的私网地址；Tailscale 是推荐的免费远程访问方式。
 - iOS Safari/PWA 不支持 Android 那种常驻前台服务；锁屏后的长期业务通知需要未来接入 APNs 或其他推送方案。
 - 如果 Safari 打不开，请确认 Gateway URL 是 iPhone 可访问的 LAN/Tailscale/ZeroTier 地址，而不是 `127.0.0.1`。
 
@@ -106,10 +109,11 @@ iOS 使用说明：
 
 Android App 不运行 Core，它是远程设备客户端。
 
-1. 在 Mac 的 Web Console 或 macOS 菜单里打开 **Pair Mobile**，切换到 **Android**。
-2. 在 Android App 里点击扫码，扫描二维码，或手动输入 Gateway URL 和 pairing code。
-3. 扫描二维码后，Android 会保存 Mac 地址和设备 token。
-4. 配对完成后，手机会加载同一套 Web Console。
+1. 推荐先在 Mac 和 Android 手机上安装免费的 Tailscale，并登录同一个 tailnet。只在同一 Wi-Fi 使用时可以跳过。
+2. 在 Mac 的 Web Console 或 macOS 菜单里打开 **Pair Mobile**，切换到 **Android**。
+3. 在 Android App 里点击扫码，扫描二维码，或手动输入 Gateway URL 和 pairing code。
+4. 扫描二维码后，Android 会保存 Mac 的 LAN、Tailscale 和自定义 remote URL，并用 `coreId` 确认没有连错电脑。
+5. 配对完成后，手机会加载同一套 Web Console。离开家后，只要 Mac 和手机的 Tailscale 都在线，Android 会自动尝试 Tailscale 地址。
 
 构建 Android APK：
 
@@ -123,7 +127,7 @@ APK 路径：
 apps/android/ForgeAgentAndroid/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Android 后台服务会保持连接状态通知，并在 Agent 回复、权限请求、MCP elicitation 或 session blocked 时发出业务通知。手机必须能访问 Mac 的局域网、Tailscale、ZeroTier 或其他私网地址。
+Android 后台服务会保持连接状态通知，并在 Agent 回复、权限请求、MCP elicitation 或 session blocked 时发出业务通知。手机必须能访问 Mac 的局域网、Tailscale、ZeroTier 或其他私网地址；ForgeAgent 默认推荐 Tailscale。
 
 ## 连接 Chrome
 
@@ -235,7 +239,7 @@ npm run extensions -- doctor
 - Danger Free 是 session 级开关，只影响当前 session 的审批策略
 - Workspace sandbox 会限制文件工具访问项目根和 session scratch workspace
 
-ForgeAgent V1 是本地/私网优先产品，不是 SaaS 多用户服务。若要暴露到公网，请自行通过 HTTPS reverse proxy、Cloudflare Tunnel、Tailscale Funnel 等方式处理网络安全边界。
+ForgeAgent V1 是本地/私网优先产品，不是 SaaS 多用户服务。手机离开家后继续使用，推荐安装免费的 Tailscale，让手机和 Mac 处在同一个私有 tailnet。高级用户也可以通过 `FORGE_REMOTE_URLS` 配置 Cloudflare Tunnel、ZeroTier hostname 或 HTTPS reverse proxy，但不要直接公网端口转发 ForgeAgent。
 
 ## 常见问题
 
@@ -260,16 +264,17 @@ npm run forgeagent -- restart
 确认：
 
 - Mac 上 ForgeAgent Core 正常运行
-- 手机和 Mac 在同一局域网或同一私网/VPN
-- Web Console 的 Pair Mobile 使用的是手机可访问的 LAN URL
+- 手机和 Mac 在同一局域网，或两边 Tailscale/ZeroTier 都在线
+- Web Console 的 Pair Mobile 显示 `Tailscale ready` 或使用的是手机可访问的 Gateway URL
 - Android 通知权限和前台服务未被系统电池策略关闭
+- 如果离开家后不可用，打开 Android 离线页里的 **Set up Tailscale** 或给当前 connection 添加一个 trusted remote URL
 
 ### iPhone / iPad 无法打开 Web Console
 
 确认：
 
 - Mac 上 ForgeAgent Core 正常运行
-- iPhone/iPad 和 Mac 在同一局域网或同一私网/VPN
+- iPhone/iPad 和 Mac 在同一局域网，或两边 Tailscale/ZeroTier 都在线
 - 使用的是 **Pair Mobile** 里显示的 LAN/Tailscale/ZeroTier Gateway URL，不是 `http://127.0.0.1:3000`
 - Mac 自己也能打开该 LAN URL，例如 `http://192.168.x.x:3000/health`
 - Safari 地址栏里能直接打开该 URL；添加到主屏幕前应先确认 Safari 可访问

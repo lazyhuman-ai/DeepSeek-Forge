@@ -4,6 +4,7 @@ import {
   type ServerResponse,
   type Server,
 } from "node:http";
+import { execFile } from "node:child_process";
 import { hostname, networkInterfaces } from "node:os";
 import {
   dirname,
@@ -45,6 +46,26 @@ import {
 } from "../../config/provider-config-store.js";
 import type { McpCatalogEntry, McpLaunchMode, McpServerConfig, McpTransportKind, McpTrust } from "../../mcp/types.js";
 import type { ExtensionInstallInput, ExtensionKind } from "../../extensions/types.js";
+
+const execFileAsync = (file: string, args: string[], options?: { timeout?: number; maxBuffer?: number }): Promise<{ stdout: string; stderr: string }> =>
+  new Promise((resolve, reject) => {
+    execFile(
+      file,
+      args,
+      {
+        encoding: "utf8",
+        timeout: options?.timeout ?? 5_000,
+        maxBuffer: options?.maxBuffer ?? 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve({ stdout: stdout ?? "", stderr: stderr ?? "" });
+      },
+    );
+  });
 
 export type HttpAuthMode = "device" | "disabled";
 
@@ -105,7 +126,28 @@ type CoreIdentity = {
 type NetworkUrls = {
   localUrl: string;
   lanUrls: string[];
+  tailnetUrls: string[];
+  remoteUrls: string[];
+  recommendedRemoteUrl?: string;
   preferredUrl: string;
+  remoteAccessStatus: "local_only" | "lan_ready" | "tailscale_ready" | "custom_remote_ready";
+};
+
+type TailscaleOptimizationStatus = {
+  installed: boolean;
+  running: boolean;
+  optimized: boolean;
+  needsOptimization: boolean;
+  canOptimize: boolean;
+  tailscaleIps: string[];
+  health: string[];
+  prefs?: {
+    acceptDns?: boolean;
+    acceptRoutes?: boolean;
+    corpDns?: boolean;
+    routeAll?: boolean;
+  };
+  message: string;
 };
 
 type HttpSessionView = Session & {
@@ -656,6 +698,14 @@ function matchRoute(method: string, reqUrl: string): RouteMatch | null {
   }
   if (method === "GET" && segments.length === 1 && s(0) === "network-urls") {
     return { handler: "networkUrls", params: {} };
+  }
+  if (segments.length >= 1 && s(0) === "remote-access") {
+    if (method === "GET" && segments.length === 1) {
+      return { handler: "remoteAccessStatus", params: {} };
+    }
+    if (method === "POST" && segments.length === 3 && s(1) === "tailscale" && s(2) === "optimize") {
+      return { handler: "optimizeTailscale", params: {} };
+    }
   }
   if (segments.length >= 1 && s(0) === "extensions") {
     if (method === "GET" && segments.length === 1) {
@@ -1573,6 +1623,26 @@ async function handleRoute(
 
     case "networkUrls": {
       sendJson(res, 200, buildNetworkUrlsPayload(req, options), origin);
+      return;
+    }
+
+    case "remoteAccessStatus": {
+      sendJson(res, 200, await buildRemoteAccessPayload(req, options), origin);
+      return;
+    }
+
+    case "optimizeTailscale": {
+      try {
+        await optimizeTailscaleForForgeAgent();
+        sendJson(res, 200, await buildRemoteAccessPayload(req, options), origin);
+      } catch (err) {
+        sendError(
+          res,
+          500,
+          err instanceof Error ? err.message : "Failed to optimize Tailscale settings.",
+          origin,
+        );
+      }
       return;
     }
 
@@ -2596,6 +2666,7 @@ function buildHealthPayload(
 ): Record<string, unknown> {
   const baseUrl = requestBaseUrl(req);
   const identity = getCoreIdentity(options);
+  const networkUrls = computeNetworkUrls(req, options);
   const runtime = api.getWebridgeRuntime();
   const webridge = runtime
     ? { enabled: true, ...runtime.getHealth() }
@@ -2616,6 +2687,7 @@ function buildHealthPayload(
       host: options.discovery.host,
       port: options.discovery.port,
     },
+    networkUrls,
     auth: {
       mode: options.authMode,
     },
@@ -2676,6 +2748,114 @@ function buildNetworkUrlsPayload(
   };
 }
 
+async function buildRemoteAccessPayload(
+  req: IncomingMessage,
+  options: ResolvedHttpServerOptions,
+): Promise<Record<string, unknown>> {
+  const networkUrls = computeNetworkUrls(req, options);
+  const identity = getCoreIdentity(options);
+  return {
+    ...identity,
+    networkUrls,
+    tailscale: await getTailscaleOptimizationStatus(),
+  };
+}
+
+async function getTailscaleOptimizationStatus(): Promise<TailscaleOptimizationStatus> {
+  const [statusResult, prefsResult] = await Promise.allSettled([
+    execFileAsync("tailscale", ["status", "--json"], { timeout: 5_000 }),
+    execFileAsync("tailscale", ["debug", "prefs"], { timeout: 5_000 }),
+  ]);
+
+  if (statusResult.status === "rejected" && prefsResult.status === "rejected") {
+    return {
+      installed: false,
+      running: false,
+      optimized: false,
+      needsOptimization: false,
+      canOptimize: false,
+      tailscaleIps: [],
+      health: [],
+      message: "Tailscale is not installed or is not available on PATH. Install Tailscale on this Mac for away-from-home mobile access.",
+    };
+  }
+
+  const status = statusResult.status === "fulfilled" ? parseJsonRecord(statusResult.value.stdout) : {};
+  const prefs = prefsResult.status === "fulfilled" ? parseJsonRecord(prefsResult.value.stdout) : {};
+  const backendState = typeof status.BackendState === "string" ? status.BackendState : "";
+  const running = backendState === "Running";
+  const tailscaleIps = Array.isArray(status.TailscaleIPs)
+    ? status.TailscaleIPs.filter((value): value is string => typeof value === "string")
+    : [];
+  const health = Array.isArray(status.Health)
+    ? status.Health.filter((value): value is string => typeof value === "string")
+    : [];
+  const corpDns = typeof prefs.CorpDNS === "boolean" ? prefs.CorpDNS : undefined;
+  const routeAll = typeof prefs.RouteAll === "boolean" ? prefs.RouteAll : undefined;
+  const acceptDns = corpDns;
+  const acceptRoutes = routeAll;
+  const needsOptimization = running && (acceptDns === true || acceptRoutes === true);
+  const optimized = running && acceptDns === false && acceptRoutes === false;
+  return {
+    installed: true,
+    running,
+    optimized,
+    needsOptimization,
+    canOptimize: true,
+    tailscaleIps,
+    health,
+    prefs: {
+      ...(acceptDns !== undefined ? { acceptDns } : {}),
+      ...(acceptRoutes !== undefined ? { acceptRoutes } : {}),
+      ...(corpDns !== undefined ? { corpDns } : {}),
+      ...(routeAll !== undefined ? { routeAll } : {}),
+    },
+    message: tailscaleOptimizationMessage({ running, optimized, needsOptimization, health }),
+  };
+}
+
+function tailscaleOptimizationMessage(input: {
+  running: boolean;
+  optimized: boolean;
+  needsOptimization: boolean;
+  health: string[];
+}): string {
+  if (!input.running) {
+    return "Tailscale is installed but not running. Open Tailscale on the Mac and sign in before pairing away from home.";
+  }
+  if (input.needsOptimization) {
+    return "Tailscale is currently allowed to manage DNS or routes. ForgeAgent can keep Tailscale remote access while disabling that DNS/route takeover, which avoids breaking DeepSeek/provider traffic on this Mac.";
+  }
+  if (input.optimized) {
+    return "Tailscale remote access is optimized for ForgeAgent. It can carry phone-to-Mac traffic without taking over this Mac's DeepSeek DNS/proxy route.";
+  }
+  if (input.health.length > 0) {
+    return input.health.join(" ");
+  }
+  return "Tailscale is available.";
+}
+
+async function optimizeTailscaleForForgeAgent(): Promise<void> {
+  const before = await getTailscaleOptimizationStatus();
+  if (!before.installed || !before.canOptimize) {
+    throw new Error(before.message);
+  }
+  await execFileAsync("tailscale", ["set", "--accept-dns=false", "--accept-routes=false"], {
+    timeout: 10_000,
+  });
+}
+
+function parseJsonRecord(raw: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 function computeNetworkUrls(
   req: IncomingMessage,
   options: ResolvedHttpServerOptions,
@@ -2685,11 +2865,31 @@ function computeNetworkUrls(
     : "http";
   const port = options.discovery.port ?? parsePort(req.headers.host) ?? 3000;
   const localUrl = `${protocol}://127.0.0.1:${port}`;
-  const lanUrls = lanAddresses().map((address) => `${protocol}://${hostForUrl(address)}:${port}`);
+  const addresses = publishesDirectNetworkUrls(options.discovery.host) ? networkAddresses() : [];
+  const tailnetUrls = addresses
+    .filter((address) => isTailscaleAddress(address))
+    .map((address) => `${protocol}://${hostForUrl(address)}:${port}`);
+  const lanUrls = addresses
+    .filter((address) => !isTailscaleAddress(address))
+    .map((address) => `${protocol}://${hostForUrl(address)}:${port}`);
+  const remoteUrls = configuredRemoteUrls();
+  const recommendedRemoteUrl = tailnetUrls[0] ?? remoteUrls[0];
+  const remoteAccessStatus =
+    tailnetUrls.length > 0
+      ? "tailscale_ready"
+      : remoteUrls.length > 0
+        ? "custom_remote_ready"
+        : lanUrls.length > 0
+          ? "lan_ready"
+          : "local_only";
   return {
     localUrl,
     lanUrls,
-    preferredUrl: lanUrls[0] ?? localUrl,
+    tailnetUrls,
+    remoteUrls,
+    ...(recommendedRemoteUrl ? { recommendedRemoteUrl } : {}),
+    preferredUrl: recommendedRemoteUrl ?? lanUrls[0] ?? localUrl,
+    remoteAccessStatus,
   };
 }
 
@@ -2705,6 +2905,13 @@ function buildConnectionMetadata(
   };
 }
 
+function publishesDirectNetworkUrls(bindHost: string | undefined): boolean {
+  if (!bindHost) return true;
+  const normalized = bindHost.trim().replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+  if (!normalized || normalized === "0.0.0.0" || normalized === "::" || normalized === "*") return true;
+  return normalized !== "127.0.0.1" && normalized !== "localhost" && normalized !== "::1";
+}
+
 function parsePort(host: string | undefined): number | null {
   if (!host) return null;
   const match = /:(\d+)$/.exec(host);
@@ -2713,19 +2920,20 @@ function parsePort(host: string | undefined): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function lanAddresses(): string[] {
+function networkAddresses(): string[] {
   const addresses: string[] = [];
   for (const entries of Object.values(networkInterfaces())) {
     for (const entry of entries ?? []) {
       if (entry.internal) continue;
       if (entry.family !== "IPv4" && entry.family !== "IPv6") continue;
       if (entry.family === "IPv6" && entry.address.startsWith("fe80:")) continue;
+      if (entry.family === "IPv4" && !isPublishableIPv4(entry.address)) continue;
       addresses.push(entry.address);
     }
   }
   return Array.from(new Set(addresses)).sort((a, b) => {
-    const aPrivate = isPrivateIPv4(a) ? 0 : 1;
-    const bPrivate = isPrivateIPv4(b) ? 0 : 1;
+    const aPrivate = isTailscaleAddress(a) || isPrivateIPv4(a) ? 0 : 1;
+    const bPrivate = isTailscaleAddress(b) || isPrivateIPv4(b) ? 0 : 1;
     return aPrivate - bPrivate || a.localeCompare(b);
   });
 }
@@ -2734,6 +2942,54 @@ function isPrivateIPv4(address: string): boolean {
   return /^10\./.test(address)
     || /^192\.168\./.test(address)
     || /^172\.(1[6-9]|2\d|3[01])\./.test(address);
+}
+
+function isPublishableIPv4(address: string): boolean {
+  const parts = address.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [a, b] = parts as [number, number, number, number];
+  if (a === 0 || a === 127 || a >= 224) return false;
+  if (a === 169 && b === 254) return false;
+  // 198.18.0.0/15 is reserved for benchmarking and is commonly used by local
+  // proxy/fake-IP TUN devices. It is never a phone-reachable LAN endpoint.
+  if (a === 198 && (b === 18 || b === 19)) return false;
+  return true;
+}
+
+function isTailscaleAddress(address: string): boolean {
+  if (/^100\./.test(address)) {
+    const [, second] = address.split(".");
+    const parsed = Number(second);
+    return Number.isInteger(parsed) && parsed >= 64 && parsed <= 127;
+  }
+  const lower = address.toLowerCase();
+  return lower.startsWith("fd7a:115c:a1e0:");
+}
+
+function configuredRemoteUrls(): string[] {
+  const raw = process.env.FORGE_REMOTE_URLS ?? "";
+  const urls = raw
+    .split(",")
+    .map((value) => normalizeRemoteUrl(value))
+    .filter((value): value is string => value !== null);
+  return Array.from(new Set(urls));
+}
+
+function normalizeRemoteUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return null;
+  }
 }
 
 function hostForUrl(address: string): string {

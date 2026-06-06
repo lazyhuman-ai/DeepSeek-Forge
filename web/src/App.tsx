@@ -15,8 +15,10 @@ import type {
   Diagnostics,
   ExtensionCandidate,
   ExtensionStatus,
+  NetworkUrls,
   PermissionRequest,
   Project,
+  RemoteAccessStatus,
   Session,
   SessionBranchState,
   SessionEvent,
@@ -443,12 +445,48 @@ export function App() {
     markSessionRead(sessionId, maxSeq(events));
   }, [markSessionRead]);
 
+  const reconcileRunningSessions = useCallback(async () => {
+    const selectedSessionId = selectedIdRef.current;
+    const hadRunning = sessionsRef.current.some((session) => session.status === "running");
+    if (!hadRunning && !selectedSessionId) return;
+
+    const ordered = await reloadSessions(selectedSessionId || undefined);
+    const selectedSession = selectedSessionId
+      ? ordered.find((session) => session.id === selectedSessionId)
+      : null;
+    if (!selectedSession) return;
+
+    const branchId = selectedBranchIdRef.current ||
+      deviceStateRef.current?.selectedBranchBySession?.[selectedSessionId] ||
+      selectedSession.activeBranchId ||
+      "main";
+    const afterSeq = maxSeq(threadRef.current);
+    const events = await api.thread(selectedSessionId, afterSeq, branchId);
+    if (events.length === 0) return;
+
+    cursorRef.current = Math.max(cursorRef.current, maxSeq(events));
+    setThread((current) => {
+      let next = current;
+      for (const event of events) {
+        next = mergeEvent(next, event);
+      }
+      return next;
+    });
+    if (events.some((event) => event.type === "usage_event" || event.type === "context_usage_event")) {
+      void api.usage(selectedSessionId).then(setUsage).catch(() => undefined);
+    }
+    if (stickToBottomRef.current) {
+      markSessionRead(selectedSessionId, maxSeq([...threadRef.current, ...events]));
+    }
+  }, [markSessionRead, reloadSessions]);
+
   const boot = useCallback(async () => {
     setLoadState("booting");
     setError("");
     try {
       const urlParams = new URLSearchParams(window.location.search);
       const urlPairingCode = urlParams.get("pairCode") ?? "";
+      const requestedRail = parseRailPanel(urlParams.get("rail"));
       if (urlPairingCode) {
         await pairWithCode(urlPairingCode);
         urlParams.delete("pairCode");
@@ -467,14 +505,22 @@ export function App() {
         setSelectedProjectId(projectId);
         await patchDeviceState({ selectedProjectId: projectId });
       }
-      const requestedSessionId = new URLSearchParams(window.location.search).get("selectSessionId") ?? "";
+      const requestedSessionId = urlParams.get("selectSessionId") ?? "";
       const ordered = await reloadSessions(requestedSessionId || undefined, projectId);
       const first = requestedSessionId && ordered.some((session) => session.id === requestedSessionId)
         ? requestedSessionId
         : ordered[0]?.id ?? "";
       if (first) await loadThread(first);
       if (requestedSessionId) {
-        window.history.replaceState({}, "", window.location.pathname);
+        urlParams.delete("selectSessionId");
+      }
+      if (requestedRail) {
+        setRailPanel(requestedRail);
+        urlParams.delete("rail");
+      }
+      const nextQuery = urlParams.toString();
+      if (requestedSessionId || requestedRail) {
+        window.history.replaceState({}, "", `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`);
       }
       setLoadState("ready");
     } catch (err) {
@@ -561,6 +607,15 @@ export function App() {
       source?.close();
     };
   }, [loadState, markSessionRead, maybeNotifyNative, reloadSessions, reloadStatus]);
+
+  useEffect(() => {
+    if (loadState !== "ready") return undefined;
+    const timer = window.setInterval(() => {
+      if (!sessionsRef.current.some((session) => session.status === "running") && selected?.status !== "running") return;
+      void reconcileRunningSessions().catch(() => undefined);
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [loadState, reconcileRunningSessions, selected?.status]);
 
   useEffect(() => {
     if (!stickToBottomRef.current) return;
@@ -1458,6 +1513,23 @@ export function App() {
       ) : null}
     </main>
   );
+}
+
+function parseRailPanel(value: string | null): RailPanel | null {
+  switch (value) {
+    case "provider":
+    case "android":
+    case "browser":
+    case "mcp":
+    case "context":
+    case "permissions":
+    case "notifications":
+    case "memory":
+    case "skills":
+      return value;
+    default:
+      return null;
+  }
 }
 
 function terminalStatusText(session: TerminalSession | null, busy: boolean): string {
@@ -2917,6 +2989,8 @@ function DrawerRows({ rows }: { rows: Array<[string, string]> }) {
 function PairMobilePanel() {
   const [platform, setPlatform] = useState<"iphone" | "android">("iphone");
   const [baseUrl, setBaseUrl] = useState("");
+  const [networkUrls, setNetworkUrls] = useState<NetworkUrls | null>(null);
+  const [remoteAccess, setRemoteAccess] = useState<RemoteAccessStatus | null>(null);
   const [pairingUrl, setPairingUrl] = useState("");
   const [pairingCodeValue, setPairingCodeValue] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
@@ -2925,21 +2999,26 @@ function PairMobilePanel() {
   const [gatewayWarning, setGatewayWarning] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [optimizingTailscale, setOptimizingTailscale] = useState(false);
 
   const createPairingLink = useCallback(async (preferredBaseUrl?: string) => {
     setLoading(true);
     setError("");
     setGatewayWarning("");
     try {
-      const urls = await api.networkUrls();
-      const selectedBaseUrl = preferredBaseUrl || urls.preferredUrl || urls.localUrl;
-      setBaseUrl(selectedBaseUrl);
-      const reachable = await checkGatewayReachable(selectedBaseUrl);
-      if (!reachable) {
-        setGatewayWarning(
-          "This Gateway URL is not reachable from this browser. Restart ForgeAgent with --host 0.0.0.0, then refresh this panel.",
-        );
+      let urls: NetworkUrls;
+      try {
+        const access = await api.remoteAccess();
+        setRemoteAccess(access);
+        urls = normalizeNetworkUrls(access.networkUrls);
+      } catch {
+        const legacyUrls = await api.networkUrls();
+        setRemoteAccess(null);
+        urls = normalizeNetworkUrls(legacyUrls);
       }
+      setNetworkUrls(urls);
+      const selectedBaseUrl = preferredBaseUrl || urls.recommendedRemoteUrl || urls.preferredUrl || urls.localUrl;
+      setBaseUrl(selectedBaseUrl);
       const issued = await api.createPairingCode(selectedBaseUrl);
       setPairingCodeValue(issued.code);
       setPairingUrl(issued.pairingUrl);
@@ -2956,6 +3035,15 @@ function PairMobilePanel() {
       } as const;
       setGatewayQrDataUrl(await QRCode.toDataURL(iphonePairingUrl, qrOptions));
       setAndroidQrDataUrl(await QRCode.toDataURL(issued.pairingUrl, qrOptions));
+      if (shouldCheckGatewayReachability(selectedBaseUrl)) {
+        void checkGatewayReachable(selectedBaseUrl).then((reachable) => {
+          if (!reachable) {
+            setGatewayWarning(
+              "This local Gateway URL is not reachable from this browser. Restart ForgeAgent and refresh this panel.",
+            );
+          }
+        });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -2963,16 +3051,34 @@ function PairMobilePanel() {
     }
   }, []);
 
+  const optimizeTailscale = useCallback(async () => {
+    setOptimizingTailscale(true);
+    setError("");
+    try {
+      const access = await api.optimizeTailscale();
+      setRemoteAccess(access);
+      const urls = normalizeNetworkUrls(access.networkUrls);
+      setNetworkUrls(urls);
+      await createPairingLink(urls.recommendedRemoteUrl ?? urls.preferredUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setOptimizingTailscale(false);
+    }
+  }, [createPairingLink]);
+
   useEffect(() => {
     void createPairingLink();
   }, [createPairingLink]);
 
   return (
     <div className="pair-android-panel">
-      <p className="drawer-empty">
-        Use this Mac address from iPhone Safari, Android, or another device on the same private network.
-        Pairing links expire in 5 minutes.
-      </p>
+      <RemoteAccessSummary
+        urls={networkUrls}
+        remoteAccess={remoteAccess}
+        onOptimizeTailscale={optimizeTailscale}
+        optimizingTailscale={optimizingTailscale}
+      />
       <div className="pair-platform-switch" role="tablist" aria-label="Mobile pairing target">
         <button
           type="button"
@@ -2999,7 +3105,7 @@ function PairMobilePanel() {
           <>
             <strong>iPhone / iPad web app</strong>
             <ol>
-              <li>Connect the iPhone to the same Wi-Fi, Tailscale, ZeroTier, or trusted tunnel as this Mac.</li>
+              <li>For away-from-home access, install free Tailscale on this Mac and iPhone first.</li>
               <li>Scan the QR code with Camera to pair and open Safari automatically.</li>
               <li>Tap Share, then Add to Home Screen for an app-like launcher.</li>
             </ol>
@@ -3010,7 +3116,7 @@ function PairMobilePanel() {
             <ol>
               <li>Open the ForgeAgent Android app and tap scan.</li>
               <li>Scan the QR code below to pair this Mac.</li>
-              <li>Android stores the Mac address and device token after pairing.</li>
+              <li>Android stores all LAN, Tailscale, and custom remote addresses for this Mac.</li>
             </ol>
           </>
         )}
@@ -3062,11 +3168,177 @@ function PairMobilePanel() {
   );
 }
 
+function normalizeNetworkUrls(input: NetworkUrls): NetworkUrls {
+  const localUrl = typeof input.localUrl === "string" && input.localUrl ? input.localUrl : window.location.origin;
+  const rawLanUrls = normalizedUrlList(input.lanUrls);
+  const rawTailnetUrls = normalizedUrlList(input.tailnetUrls);
+  const rawRemoteUrls = normalizedUrlList(input.remoteUrls);
+  const preferredInputUrl = typeof input.preferredUrl === "string" && input.preferredUrl.length > 0 ? input.preferredUrl : "";
+  const recommendedInputUrl = typeof input.recommendedRemoteUrl === "string" && input.recommendedRemoteUrl.length > 0
+    ? input.recommendedRemoteUrl
+    : undefined;
+  const inferredTailnetUrls = uniqueStrings([
+    ...rawTailnetUrls,
+    ...rawLanUrls.filter(isTailscaleUrl),
+    ...rawRemoteUrls.filter(isTailscaleUrl),
+    ...(preferredInputUrl && isTailscaleUrl(preferredInputUrl) ? [preferredInputUrl] : []),
+    ...(recommendedInputUrl && isTailscaleUrl(recommendedInputUrl) ? [recommendedInputUrl] : []),
+  ]);
+  const tailnetSet = new Set(inferredTailnetUrls);
+  const lanUrls = rawLanUrls.filter((url) => !tailnetSet.has(url));
+  const remoteUrls = rawRemoteUrls.filter((url) => !tailnetSet.has(url));
+  const tailnetUrls = inferredTailnetUrls;
+  const recommendedRemoteUrl = recommendedInputUrl ?? tailnetUrls[0];
+  const remoteAccessStatus = normalizeRemoteAccessStatus(input.remoteAccessStatus, { tailnetUrls, remoteUrls, lanUrls });
+  const preferredUrl = preferredInputUrl || recommendedRemoteUrl || lanUrls[0] || localUrl;
+  return {
+    localUrl,
+    lanUrls,
+    tailnetUrls,
+    remoteUrls,
+    ...(recommendedRemoteUrl ? { recommendedRemoteUrl } : {}),
+    preferredUrl,
+    remoteAccessStatus,
+  };
+}
+
+function normalizeRemoteAccessStatus(
+  value: unknown,
+  urls: { tailnetUrls: string[]; remoteUrls: string[]; lanUrls: string[] },
+): NetworkUrls["remoteAccessStatus"] {
+  if (urls.tailnetUrls.length > 0) return "tailscale_ready";
+  if (urls.remoteUrls.length > 0) return "custom_remote_ready";
+  if (urls.lanUrls.length > 0 && value !== "local_only") return "lan_ready";
+  if (
+    value === "local_only"
+    || value === "lan_ready"
+    || value === "tailscale_ready"
+    || value === "custom_remote_ready"
+  ) {
+    return value;
+  }
+  return "local_only";
+}
+
+function normalizedUrlList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? uniqueStrings(value.filter((url): url is string => typeof url === "string" && url.length > 0))
+    : [];
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+function isTailscaleUrl(value: string): boolean {
+  try {
+    const host = new URL(value).hostname.replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+    if (host.startsWith("100.")) {
+      const [, second] = host.split(".");
+      const parsed = Number(second);
+      return Number.isInteger(parsed) && parsed >= 64 && parsed <= 127;
+    }
+    return host.startsWith("fd7a:115c:a1e0:");
+  } catch {
+    return false;
+  }
+}
+
+function RemoteAccessSummary({
+  urls,
+  remoteAccess,
+  onOptimizeTailscale,
+  optimizingTailscale,
+}: {
+  urls: NetworkUrls | null;
+  remoteAccess: RemoteAccessStatus | null;
+  onOptimizeTailscale: () => void;
+  optimizingTailscale: boolean;
+}) {
+  const safeUrls = urls ? normalizeNetworkUrls(urls) : null;
+  const status = safeUrls?.remoteAccessStatus ?? "local_only";
+  const tailnetUrls = safeUrls?.tailnetUrls ?? [];
+  const remoteUrls = safeUrls?.remoteUrls ?? [];
+  const tailscale = remoteAccess?.tailscale ?? null;
+  const needsOptimization = tailscale?.needsOptimization === true;
+  const rows: Array<[string, string]> = [
+    ["Status", remoteAccessLabel(status)],
+    ["Recommended", safeUrls?.recommendedRemoteUrl ?? safeUrls?.preferredUrl ?? "Checking..."],
+    ["Tailscale", tailnetUrls.length ? `${tailnetUrls.length} address${tailnetUrls.length === 1 ? "" : "es"}` : "not detected"],
+    ["Mac routing", tailscale ? tailscaleRouteLabel(tailscale) : "checking"],
+    ["Custom remote", remoteUrls.length ? `${remoteUrls.length} configured` : "none"],
+  ];
+  return (
+    <section className={`remote-access-card ${status}${needsOptimization ? " needs_tailscale_optimization" : ""}`}>
+      <div>
+        <strong>{remoteAccessTitle(status)}</strong>
+        <p>{remoteAccessMessage(status)}</p>
+      </div>
+      <DrawerRows rows={rows} />
+      {tailscale ? (
+        <p className={needsOptimization ? "remote-access-warning" : "remote-access-note"}>
+          {tailscale.message}
+        </p>
+      ) : null}
+      <div className="permission-actions">
+        <button onClick={() => window.open("https://tailscale.com/download", "_blank", "noopener,noreferrer")}>Install/Open Tailscale</button>
+        {needsOptimization ? (
+          <button type="button" onClick={onOptimizeTailscale} disabled={optimizingTailscale}>
+            {optimizingTailscale ? "Optimizing…" : "Optimize Tailscale for ForgeAgent"}
+          </button>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function tailscaleRouteLabel(status: RemoteAccessStatus["tailscale"]): string {
+  if (!status.installed) return "Tailscale not installed";
+  if (!status.running) return "Tailscale stopped";
+  if (status.needsOptimization) return "needs optimization";
+  if (status.optimized) return "optimized";
+  return "available";
+}
+
+function remoteAccessTitle(status: NetworkUrls["remoteAccessStatus"]): string {
+  switch (status) {
+    case "tailscale_ready": return "Remote access is ready";
+    case "custom_remote_ready": return "Custom remote URL is configured";
+    case "lan_ready": return "Local network pairing is ready";
+    case "local_only": return "Local-only for now";
+  }
+}
+
+function remoteAccessLabel(status: NetworkUrls["remoteAccessStatus"]): string {
+  switch (status) {
+    case "tailscale_ready": return "Tailscale ready";
+    case "custom_remote_ready": return "Remote URL ready";
+    case "lan_ready": return "LAN only";
+    case "local_only": return "local only";
+  }
+}
+
+function remoteAccessMessage(status: NetworkUrls["remoteAccessStatus"]): string {
+  switch (status) {
+    case "tailscale_ready":
+      return "ForgeAgent found a Tailscale address. Phones can keep using this Mac away from home when Tailscale is online.";
+    case "custom_remote_ready":
+      return "ForgeAgent found a configured remote URL. Use this only with a trusted tunnel or HTTPS reverse proxy.";
+    case "lan_ready":
+      return "Pairing works on this Wi-Fi. Install free Tailscale on the Mac and phone for away-from-home access.";
+    case "local_only":
+      return "Only this Mac can reach ForgeAgent right now. Enable LAN/private remote access before pairing a phone.";
+  }
+}
+
 async function checkGatewayReachable(baseUrl: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 1500);
   try {
     const url = new URL("/health", baseUrl);
     const response = await fetch(url.toString(), {
       cache: "no-store",
+      signal: controller.signal,
       headers: {
         "Accept": "application/json",
       },
@@ -3074,6 +3346,16 @@ async function checkGatewayReachable(baseUrl: string): Promise<boolean> {
     if (!response.ok) return false;
     const data = await response.json() as { app?: unknown; status?: unknown };
     return data.app === "ForgeAgent" && data.status === "ready";
+  } catch {
+    return false;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function shouldCheckGatewayReachability(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).origin === window.location.origin;
   } catch {
     return false;
   }

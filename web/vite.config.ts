@@ -31,6 +31,7 @@ export default defineConfig({
       "/artifacts": "http://127.0.0.1:3000",
       "/files": "http://127.0.0.1:3000",
       "/network-urls": "http://127.0.0.1:3000",
+      "/remote-access": "http://127.0.0.1:3000",
       "/identity": "http://127.0.0.1:3000",
       "/health": "http://127.0.0.1:3000",
       "/discovery": "http://127.0.0.1:3000",

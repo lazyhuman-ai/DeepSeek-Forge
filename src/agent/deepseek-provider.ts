@@ -137,7 +137,7 @@ export class DeepSeekProvider implements ModelProvider {
   async generate(
     messages: ModelMessage[],
     tools?: ToolDefinition[],
-    callbacks?: { onToken?: (token: string) => void; signal?: AbortSignal },
+    callbacks?: { onToken?: (token: string) => void; onStatus?: (message: string) => void; signal?: AbortSignal },
   ): Promise<ModelResponse> {
     throwIfAborted(callbacks?.signal);
     const body: Record<string, unknown> = {
@@ -165,6 +165,14 @@ export class DeepSeekProvider implements ModelProvider {
 
     const retryOptions: RetryOptions = { ...this.#retryOptions };
     if (callbacks?.signal) retryOptions.signal = callbacks.signal;
+    if (callbacks?.onStatus) {
+      retryOptions.onRetry = (event) => {
+        callbacks.onStatus?.(
+          `DeepSeek request failed (${event.reason}); retrying in ${Math.ceil(event.delayMs / 1000)}s ` +
+          `(${event.attempt}/${event.maxRetries}).`,
+        );
+      };
+    }
 
     const resp = await fetchWithRetry(
       `${this.#baseUrl}/v1/chat/completions`,

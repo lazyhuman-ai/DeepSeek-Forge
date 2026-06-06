@@ -149,7 +149,7 @@ public final class MainActivity extends Activity {
             return;
         }
         if (!isPairUri(uri)) {
-            showError("This QR code is not a ForgeAgent pairing link. Open Pair Android on the Mac and scan that QR code.");
+            showError("This QR code is not a ForgeAgent pairing link. Open Pair Mobile on the Mac and scan that QR code.");
             return;
         }
         pairFromUri(uri);
@@ -165,7 +165,11 @@ public final class MainActivity extends Activity {
         String pairingBaseUrl = trimTrailingSlash(url == null || url.isEmpty() ? "http://127.0.0.1:3000" : url);
         if (code == null || code.isEmpty()) {
             renderSetup();
-            showError("Pairing link is missing a code. Generate a fresh QR code from Pair Android on the Mac.");
+            showError("Pairing link is missing a code. Generate a fresh QR code from Pair Mobile on the Mac.");
+            return;
+        }
+        if (TailscaleSupport.isTailscaleEndpoint(pairingBaseUrl) && !TailscaleSupport.deviceAppearsOnTailscale()) {
+            renderTailscaleRequired(pairingBaseUrl, code);
             return;
         }
         renderPairing("Pairing with " + hostLabel(pairingBaseUrl) + "...");
@@ -215,7 +219,7 @@ public final class MainActivity extends Activity {
         titleParams.setMargins(0, dp(18), 0, dp(6));
         panel.addView(title, titleParams);
 
-        TextView hint = text("Android connects to a ForgeAgent Core on your Mac. If you leave the local network, choose another saved address, Tailscale/ZeroTier URL, or pair again.", 13, MUTED);
+        TextView hint = text("Android connects to ForgeAgent Core on your Mac. For away-from-home use, set up free Tailscale on both devices; ForgeAgent will save the Tailscale and local addresses from pairing.", 13, MUTED);
         hint.setLineSpacing(dp(3), 1.0f);
         LinearLayout.LayoutParams hintParams = fullWidth();
         hintParams.setMargins(0, 0, 0, dp(18));
@@ -234,7 +238,7 @@ public final class MainActivity extends Activity {
             }
         }
 
-        Button scan = button("Scan Pair Android QR", true);
+        Button scan = button("Scan Pair Mobile QR", true);
         scan.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_forge_scan, 0, 0, 0);
         scan.setCompoundDrawablePadding(dp(10));
         tintCompoundDrawables(scan, Color.WHITE);
@@ -360,13 +364,13 @@ public final class MainActivity extends Activity {
         copyParams.setMargins(0, dp(10), 0, dp(28));
         panel.addView(copy, copyParams);
 
-        Button scan = button("Scan Pair Android QR", true);
+        Button scan = button("Scan Pair Mobile QR", true);
         scan.setCompoundDrawablesWithIntrinsicBounds(R.drawable.ic_forge_scan, 0, 0, 0);
         scan.setCompoundDrawablePadding(dp(10));
         tintCompoundDrawables(scan, Color.WHITE);
         panel.addView(scan, fullWidth());
 
-        TextView scannerHint = text("Open Pair Android in the Mac app or Web Console, then scan the QR code here.", 13, MUTED);
+        TextView scannerHint = text("Open Pair Mobile in the Mac app or Web Console, then scan the QR code here.", 13, MUTED);
         scannerHint.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams scannerHintParams = fullWidth();
         scannerHintParams.setMargins(0, dp(12), 0, dp(26));
@@ -407,9 +411,87 @@ public final class MainActivity extends Activity {
         scan.setOnClickListener(v -> startQrScan());
         pair.setOnClickListener(v -> {
             String pairingBaseUrl = trimTrailingSlash(urlInput.getText().toString().trim());
+            if (TailscaleSupport.isTailscaleEndpoint(pairingBaseUrl) && !TailscaleSupport.deviceAppearsOnTailscale()) {
+                renderTailscaleRequired(pairingBaseUrl, codeInput.getText().toString().trim());
+                return;
+            }
             renderPairing("Pairing with " + hostLabel(pairingBaseUrl) + "...");
             pairWithCode(pairingBaseUrl, codeInput.getText().toString().trim());
         });
+    }
+
+    private void renderTailscaleRequired(String pairingBaseUrl, String code) {
+        root.removeAllViews();
+        webView = null;
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        root.addView(scroll, match());
+
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setGravity(Gravity.CENTER_HORIZONTAL);
+        panel.setPadding(dp(24), dp(64), dp(24), dp(28));
+        scroll.addView(panel, match());
+
+        TextView brand = text("ForgeAgent", 42, TEXT);
+        brand.setTypeface(Typeface.create("serif", Typeface.BOLD));
+        panel.addView(brand, wrap());
+
+        TextView title = text("Tailscale is needed on this phone", 24, TEXT);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams titleParams = fullWidth();
+        titleParams.setMargins(0, dp(22), 0, dp(12));
+        panel.addView(title, titleParams);
+
+        TextView detail = text(
+            "The QR code points to " + hostLabel(pairingBaseUrl) + ", which is a Tailscale address. "
+                + "This Android phone is not currently connected to Tailscale, so it cannot reach your Mac from outside the local Wi‑Fi.\n\n"
+                + "Install or open Tailscale, sign in to the same account/tailnet as the Mac, wait until it says Connected, then return here and retry.",
+            15,
+            MUTED
+        );
+        detail.setGravity(Gravity.CENTER);
+        detail.setLineSpacing(dp(4), 1.0f);
+        LinearLayout.LayoutParams detailParams = fullWidth();
+        detailParams.setMargins(0, 0, 0, dp(24));
+        panel.addView(detail, detailParams);
+
+        Button tailscale = button("Install/Open Tailscale", true);
+        panel.addView(tailscale, fullWidth());
+
+        Button retry = button("I connected Tailscale, retry", false);
+        LinearLayout.LayoutParams retryParams = fullWidth();
+        retryParams.setMargins(0, dp(12), 0, 0);
+        panel.addView(retry, retryParams);
+
+        Button localWifi = button("Pair on same Wi‑Fi instead", false);
+        LinearLayout.LayoutParams localParams = fullWidth();
+        localParams.setMargins(0, dp(12), 0, 0);
+        panel.addView(localWifi, localParams);
+
+        TextView hint = text("You can also open Pair Mobile on the Mac again after both devices are on the same Wi‑Fi or Tailscale, then scan a fresh QR code.", 13, MUTED);
+        hint.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams hintParams = fullWidth();
+        hintParams.setMargins(0, dp(20), 0, 0);
+        panel.addView(hint, hintParams);
+
+        error = text("", 13, ORANGE);
+        error.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams errorParams = fullWidth();
+        errorParams.setMargins(0, dp(16), 0, 0);
+        panel.addView(error, errorParams);
+
+        tailscale.setOnClickListener(v -> openTailscale());
+        retry.setOnClickListener(v -> {
+            if (TailscaleSupport.deviceAppearsOnTailscale()) {
+                renderPairing("Pairing with " + hostLabel(pairingBaseUrl) + "...");
+                pairWithCode(pairingBaseUrl, code);
+            } else {
+                showError("Tailscale still does not appear to be connected on this phone.");
+            }
+        });
+        localWifi.setOnClickListener(v -> renderSetup());
     }
 
     private void renderPairing(String labelText) {
@@ -570,12 +652,20 @@ public final class MainActivity extends Activity {
         panel.setPadding(dp(24), dp(72), dp(24), dp(24));
         root.addView(panel, match());
 
+        boolean tailscaleMissing = connection != null
+            && connection.displayEndpoint() != null
+            && TailscaleSupport.isTailscaleEndpoint(connection.displayEndpoint())
+            && !TailscaleSupport.deviceAppearsOnTailscale();
         String name = connection == null || connection.name == null || connection.name.isEmpty() ? "ForgeAgent Desktop" : connection.name;
-        TextView title = text(name + " is offline", 28, TEXT);
+        TextView title = text(tailscaleMissing ? "Connect Tailscale on this phone" : name + " is offline", 28, TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setGravity(Gravity.CENTER);
         panel.addView(title, wrap());
 
-        TextView detail = text(message + "\n\nUse the same Wi-Fi, Tailscale, ZeroTier, or a configured remote URL. You can switch to another saved desktop or pair a new Mac.", 14, MUTED);
+        String tailnetHint = tailscaleMissing
+            ? "This saved address is a Tailscale address, but this Android phone is not currently connected to Tailscale. Install/open Tailscale, sign in to the same tailnet as the Mac, then retry."
+            : "The Mac may be asleep/offline, Tailscale may be disconnected, or every saved remote URL may be unreachable. Retry, set up free Tailscale remote access, or add a trusted tunnel URL.";
+        TextView detail = text(message + "\n\n" + tailnetHint, 14, MUTED);
         detail.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams detailParams = fullWidth();
         detailParams.setMargins(0, dp(18), 0, dp(24));
@@ -599,10 +689,16 @@ public final class MainActivity extends Activity {
         addUrlParams.setMargins(0, dp(12), 0, 0);
         panel.addView(addUrl, addUrlParams);
 
+        Button tailscale = button("Set up Tailscale", false);
+        LinearLayout.LayoutParams tailscaleParams = fullWidth();
+        tailscaleParams.setMargins(0, dp(12), 0, 0);
+        panel.addView(tailscale, tailscaleParams);
+
         retry.setOnClickListener(v -> openConnection(connection, ""));
         switchConnection.setOnClickListener(v -> renderConnectionHome(true));
         pairNew.setOnClickListener(v -> startQrScan());
         addUrl.setOnClickListener(v -> showAddEndpointDialog(connection));
+        tailscale.setOnClickListener(v -> openTailscale());
     }
 
     private void loadConsole() {
@@ -702,8 +798,19 @@ public final class MainActivity extends Activity {
         ForgeConnection connection = ForgeConnection.create(coreId, desktopName, token);
         connection.addEndpoint(pairingBaseUrl);
         addNetworkUrls(connection, response.optJSONObject("networkUrls"));
+        if (response.optString("recommendedRemoteUrl", "").length() > 0) connection.setRecommendedEndpoint(response.optString("recommendedRemoteUrl", ""));
         if (response.optString("localUrl", "").length() > 0) connection.addEndpoint(response.optString("localUrl", ""));
         if (response.optString("preferredUrl", "").length() > 0) connection.addEndpoint(response.optString("preferredUrl", ""));
+        if (response.optJSONArray("remoteUrls") != null) {
+            for (int i = 0; i < response.optJSONArray("remoteUrls").length(); i++) {
+                connection.addEndpoint(response.optJSONArray("remoteUrls").optString(i, ""));
+            }
+        }
+        if (response.optJSONArray("tailnetUrls") != null) {
+            for (int i = 0; i < response.optJSONArray("tailnetUrls").length(); i++) {
+                connection.addEndpoint(response.optJSONArray("tailnetUrls").optString(i, ""));
+            }
+        }
         if (response.optJSONArray("lanUrls") != null) {
             for (int i = 0; i < response.optJSONArray("lanUrls").length(); i++) {
                 connection.addEndpoint(response.optJSONArray("lanUrls").optString(i, ""));
@@ -723,8 +830,21 @@ public final class MainActivity extends Activity {
 
     private void addNetworkUrls(ForgeConnection connection, JSONObject networkUrls) {
         if (networkUrls == null) return;
+        if (networkUrls.optString("recommendedRemoteUrl", "").length() > 0) {
+            connection.setRecommendedEndpoint(networkUrls.optString("recommendedRemoteUrl", ""));
+        }
         connection.addEndpoint(networkUrls.optString("preferredUrl", ""));
         connection.addEndpoint(networkUrls.optString("localUrl", ""));
+        if (networkUrls.optJSONArray("remoteUrls") != null) {
+            for (int i = 0; i < networkUrls.optJSONArray("remoteUrls").length(); i++) {
+                connection.addEndpoint(networkUrls.optJSONArray("remoteUrls").optString(i, ""));
+            }
+        }
+        if (networkUrls.optJSONArray("tailnetUrls") != null) {
+            for (int i = 0; i < networkUrls.optJSONArray("tailnetUrls").length(); i++) {
+                connection.addEndpoint(networkUrls.optJSONArray("tailnetUrls").optString(i, ""));
+            }
+        }
         if (networkUrls.optJSONArray("lanUrls") != null) {
             for (int i = 0; i < networkUrls.optJSONArray("lanUrls").length(); i++) {
                 connection.addEndpoint(networkUrls.optJSONArray("lanUrls").optString(i, ""));
@@ -760,7 +880,7 @@ public final class MainActivity extends Activity {
             });
         }
 
-        Button scan = button("Scan Pair Android QR", true);
+        Button scan = button("Scan Pair Mobile QR", true);
         LinearLayout.LayoutParams scanParams = fullWidth();
         scanParams.setMargins(0, dp(16), 0, 0);
         panel.addView(scan, scanParams);
@@ -836,6 +956,31 @@ public final class MainActivity extends Activity {
         showBottomDialog(dialog);
     }
 
+    private void openExternal(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception ex) {
+            showError("Could not open " + url + ".");
+        }
+    }
+
+    private void openTailscale() {
+        try {
+            Intent launchIntent = getPackageManager().getLaunchIntentForPackage("com.tailscale.ipn");
+            if (launchIntent != null) {
+                startActivity(launchIntent);
+                return;
+            }
+        } catch (Exception ignored) {
+        }
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.tailscale.ipn")));
+            return;
+        } catch (Exception ignored) {
+        }
+        openExternal("https://tailscale.com/download/android");
+    }
+
     private Dialog bottomDialog() {
         return new Dialog(this);
     }
@@ -904,7 +1049,9 @@ public final class MainActivity extends Activity {
         view.setLineSpacing(dp(2), 1.0f);
         view.setIncludeFontPadding(true);
         view.setSingleLine(false);
-        view.setBreakStrategy(android.text.Layout.BREAK_STRATEGY_BALANCED);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            view.setBreakStrategy(android.graphics.text.LineBreaker.BREAK_STRATEGY_BALANCED);
+        }
         view.setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE);
         return view;
     }

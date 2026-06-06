@@ -9,8 +9,8 @@ Webridge status.
 ## Product Flow
 
 1. Start ForgeAgent on the Mac with the macOS app or local Web Console.
-2. Open **Pair Android** on the Mac.
-3. Open the Android app and tap **Scan Pair Android QR**.
+2. Open **Pair Mobile** on the Mac.
+3. Open the Android app and tap **Scan Pair Mobile QR**.
 4. After pairing, the app opens the full ForgeAgent Web Console.
 
 Manual gateway URL + pairing-code entry remains available as a fallback for

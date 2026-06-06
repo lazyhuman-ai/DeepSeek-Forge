@@ -12,6 +12,7 @@ import type {
   NetworkUrls,
   PermissionRequest,
   Project,
+  RemoteAccessStatus,
   Session,
   SessionBranchState,
   SessionEvent,
@@ -120,6 +121,8 @@ export const api = {
   testProvider: (input: { apiKey?: string; baseUrl?: string; model?: string; contextWindowTokens?: number }) =>
     apiFetch<{ ok: boolean; message: string }>("/setup/provider/test", { method: "POST", body: JSON.stringify(input) }),
   networkUrls: () => apiFetch<NetworkUrls>("/network-urls"),
+  remoteAccess: () => apiFetch<RemoteAccessStatus>("/remote-access"),
+  optimizeTailscale: () => apiFetch<RemoteAccessStatus>("/remote-access/tailscale/optimize", { method: "POST" }),
   createPairingCode: (baseUrl: string) =>
     apiFetch<{ code: string; expiresAt: string; pairingUrl: string }>("/auth/pairing-codes", {
       method: "POST",

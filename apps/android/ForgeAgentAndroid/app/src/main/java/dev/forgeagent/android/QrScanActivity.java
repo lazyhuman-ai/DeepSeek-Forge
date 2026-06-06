@@ -79,7 +79,7 @@ public final class QrScanActivity extends Activity {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
         barcodeView = new DecoratedBarcodeView(this);
-        barcodeView.setStatusText("Scan the Pair Android QR code");
+        barcodeView.setStatusText("Scan the Pair Mobile QR code");
         root.addView(barcodeView, match());
 
         TextView title = new TextView(this);

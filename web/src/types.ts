@@ -327,7 +327,38 @@ export type Diagnostics = {
 export type NetworkUrls = {
   localUrl: string;
   lanUrls: string[];
+  tailnetUrls: string[];
+  remoteUrls: string[];
+  recommendedRemoteUrl?: string;
   preferredUrl: string;
+  remoteAccessStatus: "local_only" | "lan_ready" | "tailscale_ready" | "custom_remote_ready";
+};
+
+export type TailscaleOptimizationStatus = {
+  installed: boolean;
+  running: boolean;
+  optimized: boolean;
+  needsOptimization: boolean;
+  canOptimize: boolean;
+  tailscaleIps: string[];
+  health: string[];
+  prefs?: {
+    acceptDns?: boolean;
+    acceptRoutes?: boolean;
+    corpDns?: boolean;
+    routeAll?: boolean;
+  };
+  message: string;
+};
+
+export type RemoteAccessStatus = {
+  coreId: string;
+  desktopName: string;
+  app: string;
+  version: string;
+  protocolVersion: number;
+  networkUrls: NetworkUrls;
+  tailscale: TailscaleOptimizationStatus;
 };
 
 export type PermissionRequest = {

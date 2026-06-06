@@ -42,4 +42,4 @@ will still interrupt remote Android operation.
 1. Open `ForgeAgent.app`.
 2. Configure DeepSeek in the Web Console if needed.
 3. Use the same console experience as the browser version.
-4. Use **Pair Android** from the app menu or Web Console rail to connect a phone.
+4. Use **Remote Access** from the app menu, or **Pair Mobile** from the Web Console rail, to connect a phone.

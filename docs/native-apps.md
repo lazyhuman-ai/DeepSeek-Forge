@@ -30,7 +30,7 @@ supports native QR scanning for `forgeagent://pair?...` links, injects the token
 into Web Console local storage, and then loads the full Web Console after
 pairing.
 
-Use **Pair Android** in the macOS app or Web Console to create a QR code and
+Use **Pair Mobile** in the macOS app or Web Console to create a QR code and
 deep link. The pairing code remains one-time and short-lived. Manual gateway URL
 + pairing-code entry exists only as a fallback.
 

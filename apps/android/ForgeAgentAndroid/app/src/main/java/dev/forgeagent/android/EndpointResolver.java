@@ -46,11 +46,17 @@ public final class EndpointResolver {
         if (candidates.isEmpty()) return Result.error("This connection has no saved address. Add a remote URL or pair again.");
 
         String lastError = "";
+        int lastErrorPriority = 0;
         for (String endpoint : candidates) {
             try {
                 IdentityProbe identity = probeIdentity(endpoint);
                 if (!identity.isForgeAgent) {
-                    lastError = host(endpoint) + " does not look like a ForgeAgent gateway. It returned " + identity.message + ".";
+                    String message = host(endpoint) + " does not look like a ForgeAgent gateway. It returned " + identity.message + ".";
+                    int priority = endpointErrorPriority(endpoint);
+                    if (priority >= lastErrorPriority) {
+                        lastError = message;
+                        lastErrorPriority = priority;
+                    }
                     continue;
                 }
                 if (
@@ -60,16 +66,19 @@ public final class EndpointResolver {
                     !connection.coreId.equals(identity.coreId)
                 ) {
                     lastError = host(endpoint) + " is a different ForgeAgent desktop.";
+                    lastErrorPriority = Math.max(lastErrorPriority, endpointErrorPriority(endpoint));
                     continue;
                 }
                 if (connection.coreId != null && !connection.coreId.isEmpty() && identity.coreId.isEmpty()) {
                     lastError = host(endpoint) + " is ForgeAgent, but it does not expose a desktop identity. Restart or update the Mac app, then retry.";
+                    lastErrorPriority = Math.max(lastErrorPriority, endpointErrorPriority(endpoint));
                     continue;
                 }
 
                 JSONObject deviceState = getJson(endpoint, "/device-state", connection.token);
                 if (deviceState.optString("deviceId", "").isEmpty()) {
                     lastError = host(endpoint) + " did not accept this Android device token.";
+                    lastErrorPriority = Math.max(lastErrorPriority, endpointErrorPriority(endpoint));
                     continue;
                 }
 
@@ -87,16 +96,31 @@ public final class EndpointResolver {
                     store.upsert(connection);
                     return Result.error(connection.statusMessage);
                 }
-                lastError = host(endpoint) + " returned HTTP " + ex.status + ".";
+                String message = httpErrorMessage(endpoint, ex.status);
+                int priority = endpointErrorPriority(endpoint);
+                if (priority >= lastErrorPriority) {
+                    lastError = message;
+                    lastErrorPriority = priority;
+                }
             } catch (NonJsonResponseException ex) {
-                lastError = host(endpoint) + " returned a web page instead of the ForgeAgent API. Restart or update the Mac app and retry.";
+                String message = host(endpoint) + " returned a web page instead of the ForgeAgent API. Restart or update the Mac app and retry.";
+                int priority = endpointErrorPriority(endpoint);
+                if (priority >= lastErrorPriority) {
+                    lastError = message;
+                    lastErrorPriority = priority;
+                }
             } catch (Exception ex) {
-                lastError = "Cannot reach " + host(endpoint) + ": " + (ex.getMessage() == null ? ex.toString() : ex.getMessage());
+                String message = "Cannot reach " + host(endpoint) + ": " + (ex.getMessage() == null ? ex.toString() : ex.getMessage());
+                int priority = endpointErrorPriority(endpoint);
+                if (priority >= lastErrorPriority) {
+                    lastError = message;
+                    lastErrorPriority = priority;
+                }
             }
         }
 
         connection.markOffline(lastError.isEmpty()
-            ? "ForgeAgent is not reachable. Use the same Wi-Fi, Tailscale, ZeroTier, or a configured remote URL."
+            ? "ForgeAgent is not reachable. The Mac may be asleep/offline, Tailscale may be disconnected, or every saved remote URL may be unreachable."
             : lastError);
         store.upsert(connection);
         return Result.error(connection.statusMessage);
@@ -105,13 +129,22 @@ public final class EndpointResolver {
     private ArrayList<String> candidates(ForgeConnection connection) {
         Set<String> values = new LinkedHashSet<>();
         if (connection.lastWorkingEndpoint != null && !connection.lastWorkingEndpoint.isEmpty()) {
-            values.add(ForgeConnection.trimTrailingSlash(connection.lastWorkingEndpoint));
+            addCandidate(values, connection.lastWorkingEndpoint);
+        }
+        if (connection.recommendedEndpoint != null && !connection.recommendedEndpoint.isEmpty()) {
+            addCandidate(values, connection.recommendedEndpoint);
         }
         for (String endpoint : connection.knownEndpoints) {
-            String normalized = ForgeConnection.trimTrailingSlash(endpoint);
-            if (!normalized.isEmpty()) values.add(normalized);
+            addCandidate(values, endpoint);
         }
         return new ArrayList<>(values);
+    }
+
+    private void addCandidate(Set<String> values, String endpoint) {
+        String normalized = ForgeConnection.trimTrailingSlash(endpoint);
+        if (normalized.isEmpty()) return;
+        if (TailscaleSupport.isPhoneUnreachableLocalEndpoint(normalized)) return;
+        values.add(normalized);
     }
 
     private IdentityProbe probeIdentity(String endpoint) {
@@ -175,6 +208,32 @@ public final class EndpointResolver {
 
     private String host(String endpoint) {
         return ForgeConnection.hostLabel(endpoint);
+    }
+
+    private String httpErrorMessage(String endpoint, int status) {
+        if ((status == 502 || status == 503 || status == 504) && TailscaleSupport.isTailscaleEndpoint(endpoint)) {
+            String phoneState = TailscaleSupport.deviceAppearsOnTailscale()
+                ? "This phone appears to have a Tailscale interface, so the Mac may be offline, asleep, on a different tailnet, or the remote proxy may be pointing at the wrong port."
+                : "This phone does not appear to have an active Tailscale VPN interface.";
+            return host(endpoint)
+                + " is a Tailscale address, but it returned HTTP " + status + ". "
+                + phoneState
+                + " Open Tailscale on this phone, confirm it is connected to the same account/tailnet as the Mac, then retry. "
+                + "If you are using Tailscale Serve, point it to the ForgeAgent Core port shown in Pair Mobile.";
+        }
+        if (status == 502 || status == 503 || status == 504) {
+            return host(endpoint)
+                + " returned HTTP " + status + ". A remote tunnel or proxy reached something, but its backend ForgeAgent Core is not available. "
+                + "Check that the Mac is awake, ForgeAgent Core is running, and the remote URL points to the current Core port.";
+        }
+        return host(endpoint) + " returned HTTP " + status + ".";
+    }
+
+    private int endpointErrorPriority(String endpoint) {
+        if (TailscaleSupport.isTailscaleEndpoint(endpoint)) return 4;
+        String host = host(endpoint).toLowerCase();
+        if (host.equals("127.0.0.1") || host.equals("localhost") || host.equals("::1")) return 1;
+        return 2;
     }
 
     private String snippet(String value) {

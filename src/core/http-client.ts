@@ -17,9 +17,17 @@ export interface RetryOptions {
   timeoutMs?: number;
   /** External cancellation signal for the whole request sequence */
   signal?: AbortSignal;
+  /** Optional observer for user-visible retry progress. */
+  onRetry?: (event: {
+    attempt: number;
+    maxRetries: number;
+    delayMs: number;
+    reason: string;
+    status?: number;
+  }) => void;
 }
 
-const DEFAULT_OPTIONS: Required<Omit<RetryOptions, "signal">> = {
+const DEFAULT_OPTIONS: Required<Omit<RetryOptions, "signal" | "onRetry">> = {
   maxRetries: 3,
   baseDelayMs: 1000,
   maxDelayMs: 30000,
@@ -89,7 +97,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 // ── Backoff computation ──
 
 function computeBackoff(
-  opts: Required<Omit<RetryOptions, "signal">> & Pick<RetryOptions, "signal">,
+  opts: Required<Omit<RetryOptions, "signal" | "onRetry">> & Pick<RetryOptions, "signal" | "onRetry">,
   attempt: number,
   retryAfterHeader: string | null,
 ): number {
@@ -149,6 +157,12 @@ export async function fetchWithRetry(
         throw err instanceof Error ? err : new Error(errorMsg);
       }
       const delay = computeBackoff(opts, attempt, null);
+      opts.onRetry?.({
+        attempt: attempt + 1,
+        maxRetries: opts.maxRetries,
+        delayMs: delay,
+        reason: errorMsg,
+      });
       logger.warn(
         `Request failed (${errorMsg}), retrying in ${delay}ms (attempt ${attempt + 1}/${opts.maxRetries})`,
       );
@@ -167,6 +181,13 @@ export async function fetchWithRetry(
       }
       const retryAfter = resp.headers.get("Retry-After");
       const delay = computeBackoff(opts, attempt, retryAfter);
+      opts.onRetry?.({
+        attempt: attempt + 1,
+        maxRetries: opts.maxRetries,
+        delayMs: delay,
+        reason: `${resp.status} ${resp.statusText}`,
+        status: resp.status,
+      });
       logger.warn(
         `API returned ${resp.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${opts.maxRetries})`,
       );

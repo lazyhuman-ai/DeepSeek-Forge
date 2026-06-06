@@ -16,6 +16,7 @@ public final class ForgeConnection {
     public String name;
     public String token;
     public final ArrayList<String> knownEndpoints = new ArrayList<>();
+    public String recommendedEndpoint;
     public String lastWorkingEndpoint;
     public String lastSeenAt;
     public String status;
@@ -52,6 +53,7 @@ public final class ForgeConnection {
         connection.coreId = json.optString("coreId", "");
         connection.name = json.optString("name", "ForgeAgent Desktop");
         connection.token = json.optString("token", "");
+        connection.recommendedEndpoint = json.optString("recommendedEndpoint", "");
         connection.lastWorkingEndpoint = json.optString("lastWorkingEndpoint", "");
         connection.lastSeenAt = json.optString("lastSeenAt", "");
         connection.status = json.optString("status", "unknown");
@@ -76,6 +78,7 @@ public final class ForgeConnection {
             json.put("name", name);
             json.put("token", token);
             json.put("knownEndpoints", new JSONArray(knownEndpoints));
+            json.put("recommendedEndpoint", safe(recommendedEndpoint));
             json.put("lastWorkingEndpoint", safe(lastWorkingEndpoint));
             json.put("lastSeenAt", safe(lastSeenAt));
             json.put("status", safe(status));
@@ -99,6 +102,11 @@ public final class ForgeConnection {
         next.add(normalized);
         knownEndpoints.clear();
         knownEndpoints.addAll(next);
+    }
+
+    public void setRecommendedEndpoint(String endpoint) {
+        recommendedEndpoint = trimTrailingSlash(endpoint);
+        addEndpoint(recommendedEndpoint);
     }
 
     public void markOnline(String endpoint) {

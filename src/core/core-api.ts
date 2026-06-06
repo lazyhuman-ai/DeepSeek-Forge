@@ -1352,6 +1352,10 @@ export class CoreAPI {
         if (controller.signal.aborted) return;
         this.#recordSkillUsageFromToolResult(event);
       },
+      onRuntimeEvent: (sid, event) => {
+        if (controller.signal.aborted) return;
+        this.#notificationHub.emitSessionEvent(sid, event);
+      },
     };
     if (Object.keys(session.branches ?? {}).length > 1 || activeBranchId !== MAIN_BRANCH_ID) {
       loopOptions.readThread = (sid) => this.getVisibleThread(sid, activeBranchId);

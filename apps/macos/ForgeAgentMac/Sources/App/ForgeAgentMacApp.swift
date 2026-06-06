@@ -39,8 +39,8 @@ struct ForgeAgentMacApp: App {
                     service.showLogs()
                 }
 
-                Button("Pair Android") {
-                    NotificationCenter.default.post(name: .forgeShowPairAndroid, object: nil)
+                Button("Remote Access") {
+                    NotificationCenter.default.post(name: .forgeOpenRemoteAccess, object: nil)
                 }
             }
         }
