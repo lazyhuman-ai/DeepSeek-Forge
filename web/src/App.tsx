@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent, RefObject } from "react";
 import QRCode from "qrcode";
-import { api, ensureDeviceToken, forgetDeviceToken } from "./api";
+import { api, ensureDeviceToken, forgetDeviceToken, pairWithCode } from "./api";
 import { AssistantContent } from "./AssistantContent";
 import { RichText } from "./RichText";
 import { openHtmlPreviewDocument } from "./html-preview-window";
@@ -130,6 +130,8 @@ function pickNativeWorkspace(kind: "open" | "create"): Promise<string | null> {
 export function App() {
   const [loadState, setLoadState] = useState<LoadState>("booting");
   const [error, setError] = useState<string>("");
+  const [pairingCode, setPairingCode] = useState("");
+  const [pairingBusy, setPairingBusy] = useState(false);
   const [setup, setSetup] = useState<SetupStatus | null>(null);
   const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -445,7 +447,16 @@ export function App() {
     setLoadState("booting");
     setError("");
     try {
-      await ensureDeviceToken();
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlPairingCode = urlParams.get("pairCode") ?? "";
+      if (urlPairingCode) {
+        await pairWithCode(urlPairingCode);
+        urlParams.delete("pairCode");
+        const nextQuery = urlParams.toString();
+        window.history.replaceState({}, "", `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`);
+      } else {
+        await ensureDeviceToken();
+      }
       await Promise.all([reloadStatus(), loadDeviceState()]);
       const projectsNext = await reloadProjects();
       const projectId = deviceStateRef.current?.selectedProjectId && projectsNext.some((project) => project.id === deviceStateRef.current?.selectedProjectId)
@@ -1053,16 +1064,69 @@ export function App() {
     void submitMessage();
   });
 
+  async function pairRemoteWebConsole() {
+    const code = pairingCode.trim();
+    if (!code) {
+      setError("Enter the pairing code from Pair Mobile on the Mac.");
+      return;
+    }
+    setPairingBusy(true);
+    setError("");
+    try {
+      await pairWithCode(code);
+      setPairingCode("");
+      await boot();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPairingBusy(false);
+    }
+  }
+
   if (loadState === "booting") {
     return <div className="boot">Opening ForgeAgent…</div>;
   }
 
   if (loadState === "error") {
+    const unauthorized = /unauthorized|401/i.test(error);
     return (
       <div className="boot boot-error">
-        <h1>ForgeAgent</h1>
-        <p>{error}</p>
-        <button onClick={() => { forgetDeviceToken(); void boot(); }}>Reconnect local console</button>
+        <div className="remote-pair-card">
+          <h1>ForgeAgent</h1>
+          {unauthorized ? (
+            <>
+              <p>
+                This browser is not paired yet. Open Pair Mobile on the Mac, copy the pairing code,
+                then enter it here.
+              </p>
+              <label className="remote-pair-field">
+                Pairing code
+                <input
+                  value={pairingCode}
+                  onChange={(event) => setPairingCode(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void pairRemoteWebConsole();
+                  }}
+                  placeholder="Paste pairing code"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                />
+              </label>
+              <div className="remote-pair-actions">
+                <button onClick={() => void pairRemoteWebConsole()} disabled={pairingBusy}>
+                  {pairingBusy ? "Pairing…" : "Pair this browser"}
+                </button>
+                <button onClick={() => { forgetDeviceToken(); void boot(); }}>Retry local console</button>
+              </div>
+              {error ? <p className="remote-pair-error">{error}</p> : null}
+            </>
+          ) : (
+            <>
+              <p>{error}</p>
+              <button onClick={() => { forgetDeviceToken(); void boot(); }}>Reconnect local console</button>
+            </>
+          )}
+        </div>
       </div>
     );
   }
@@ -2599,7 +2663,7 @@ function StatusRail(props: {
       />
       <RailButton
         panel="android"
-        label="Pair Android"
+        label="Pair Mobile"
         active={props.activePanel === "android"}
         tone="neutral"
         onSelect={props.onSelect}
@@ -2743,7 +2807,7 @@ function StatusDrawer(props: {
           ["Message", props.diagnostics?.webridge.message ?? "—"],
         ]} />
       ) : null}
-      {props.panel === "android" ? <PairAndroidPanel /> : null}
+      {props.panel === "android" ? <PairMobilePanel /> : null}
       {props.panel === "mcp" ? (
         <div className="drawer-list">
           <DrawerRows rows={[
@@ -2850,25 +2914,38 @@ function DrawerRows({ rows }: { rows: Array<[string, string]> }) {
   );
 }
 
-function PairAndroidPanel() {
+function PairMobilePanel() {
+  const [platform, setPlatform] = useState<"iphone" | "android">("iphone");
   const [baseUrl, setBaseUrl] = useState("");
   const [pairingUrl, setPairingUrl] = useState("");
+  const [pairingCodeValue, setPairingCodeValue] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
-  const [qrDataUrl, setQrDataUrl] = useState("");
+  const [gatewayQrDataUrl, setGatewayQrDataUrl] = useState("");
+  const [androidQrDataUrl, setAndroidQrDataUrl] = useState("");
+  const [gatewayWarning, setGatewayWarning] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   const createPairingLink = useCallback(async (preferredBaseUrl?: string) => {
     setLoading(true);
     setError("");
+    setGatewayWarning("");
     try {
       const urls = await api.networkUrls();
       const selectedBaseUrl = preferredBaseUrl || urls.preferredUrl || urls.localUrl;
       setBaseUrl(selectedBaseUrl);
+      const reachable = await checkGatewayReachable(selectedBaseUrl);
+      if (!reachable) {
+        setGatewayWarning(
+          "This Gateway URL is not reachable from this browser. Restart ForgeAgent with --host 0.0.0.0, then refresh this panel.",
+        );
+      }
       const issued = await api.createPairingCode(selectedBaseUrl);
+      setPairingCodeValue(issued.code);
       setPairingUrl(issued.pairingUrl);
       setExpiresAt(issued.expiresAt);
-      setQrDataUrl(await QRCode.toDataURL(issued.pairingUrl, {
+      const iphonePairingUrl = webPairingUrl(selectedBaseUrl, issued.code);
+      const qrOptions = {
         errorCorrectionLevel: "M",
         margin: 1,
         width: 208,
@@ -2876,7 +2953,9 @@ function PairAndroidPanel() {
           dark: "#37352f",
           light: "#ffffff",
         },
-      }));
+      } as const;
+      setGatewayQrDataUrl(await QRCode.toDataURL(iphonePairingUrl, qrOptions));
+      setAndroidQrDataUrl(await QRCode.toDataURL(issued.pairingUrl, qrOptions));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -2891,9 +2970,61 @@ function PairAndroidPanel() {
   return (
     <div className="pair-android-panel">
       <p className="drawer-empty">
-        Scan from the Android app, or open this link on your phone. The pairing code expires in 5 minutes.
+        Use this Mac address from iPhone Safari, Android, or another device on the same private network.
+        Pairing links expire in 5 minutes.
       </p>
-      {qrDataUrl ? <img className="pair-qr" src={qrDataUrl} alt="Android pairing QR code" /> : null}
+      <div className="pair-platform-switch" role="tablist" aria-label="Mobile pairing target">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={platform === "iphone"}
+          className={platform === "iphone" ? "active" : ""}
+          onClick={() => setPlatform("iphone")}
+        >
+          iPhone
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={platform === "android"}
+          className={platform === "android" ? "active" : ""}
+          onClick={() => setPlatform("android")}
+        >
+          Android
+        </button>
+      </div>
+      {gatewayWarning ? <p className="html-preview-error">{gatewayWarning}</p> : null}
+      <div className="mobile-install-card">
+        {platform === "iphone" ? (
+          <>
+            <strong>iPhone / iPad web app</strong>
+            <ol>
+              <li>Connect the iPhone to the same Wi-Fi, Tailscale, ZeroTier, or trusted tunnel as this Mac.</li>
+              <li>Scan the QR code with Camera to pair and open Safari automatically.</li>
+              <li>Tap Share, then Add to Home Screen for an app-like launcher.</li>
+            </ol>
+          </>
+        ) : (
+          <>
+            <strong>Android app pairing</strong>
+            <ol>
+              <li>Open the ForgeAgent Android app and tap scan.</li>
+              <li>Scan the QR code below to pair this Mac.</li>
+              <li>Android stores the Mac address and device token after pairing.</li>
+            </ol>
+          </>
+        )}
+      </div>
+      {(platform === "iphone" ? gatewayQrDataUrl : androidQrDataUrl) ? (
+        <figure className="pair-qr-card">
+          <img
+            className="pair-qr"
+            src={platform === "iphone" ? gatewayQrDataUrl : androidQrDataUrl}
+            alt={platform === "iphone" ? "iPhone Safari Gateway URL QR code" : "Android app pairing QR code"}
+          />
+          <figcaption>{platform === "iphone" ? "Scan with iPhone Camera" : "Scan with ForgeAgent Android"}</figcaption>
+        </figure>
+      ) : null}
       {pairingUrl ? (
         <>
           <label className="pair-field">
@@ -2904,12 +3035,22 @@ function PairAndroidPanel() {
               onBlur={() => void createPairingLink(baseUrl.trim())}
             />
           </label>
-          <label className="pair-field">
-            Pairing link
-            <textarea readOnly value={pairingUrl} rows={4} />
-          </label>
+          {platform === "android" ? (
+            <label className="pair-field">
+              Android app pairing link
+              <textarea readOnly value={pairingUrl} rows={4} />
+            </label>
+          ) : null}
+          {platform === "iphone" ? (
+            <label className="pair-field">
+              iPhone pairing code fallback
+              <input readOnly value={pairingCodeValue} />
+            </label>
+          ) : null}
           <div className="permission-actions">
-            <button onClick={() => void navigator.clipboard?.writeText(pairingUrl)}>Copy link</button>
+            <button onClick={() => void navigator.clipboard?.writeText(baseUrl)}>Copy Gateway URL</button>
+            {platform === "iphone" ? <button onClick={() => void navigator.clipboard?.writeText(pairingCodeValue)}>Copy code</button> : null}
+            {platform === "android" ? <button onClick={() => void navigator.clipboard?.writeText(pairingUrl)}>Copy link</button> : null}
             <button onClick={() => void createPairingLink(baseUrl.trim())}>Refresh</button>
           </div>
           <p className="pair-expiry">Expires {expiresAt ? new Date(expiresAt).toLocaleTimeString() : "soon"}</p>
@@ -2921,10 +3062,33 @@ function PairAndroidPanel() {
   );
 }
 
+async function checkGatewayReachable(baseUrl: string): Promise<boolean> {
+  try {
+    const url = new URL("/health", baseUrl);
+    const response = await fetch(url.toString(), {
+      cache: "no-store",
+      headers: {
+        "Accept": "application/json",
+      },
+    });
+    if (!response.ok) return false;
+    const data = await response.json() as { app?: unknown; status?: unknown };
+    return data.app === "ForgeAgent" && data.status === "ready";
+  } catch {
+    return false;
+  }
+}
+
+function webPairingUrl(baseUrl: string, code: string): string {
+  const url = new URL(baseUrl);
+  url.searchParams.set("pairCode", code);
+  return url.toString();
+}
+
 function drawerTitle(panel: RailPanel): string {
   switch (panel) {
     case "provider": return "Provider";
-    case "android": return "Pair Android";
+    case "android": return "Pair Mobile";
     case "browser": return "Chrome";
     case "mcp": return "MCP";
     case "context": return "Context";

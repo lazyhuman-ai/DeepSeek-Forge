@@ -85,6 +85,49 @@ button:disabled {
   color: var(--text);
 }
 
+.remote-pair-card {
+  width: min(420px, calc(100vw - 36px));
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 24px;
+  background: #fff;
+  box-shadow: 0 16px 44px rgba(55, 53, 47, 0.08);
+}
+
+.remote-pair-card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.remote-pair-field {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+}
+
+.remote-pair-field input {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.remote-pair-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.remote-pair-error {
+  color: var(--red) !important;
+}
+
 .app-shell {
   --sidebar-width: 280px;
   --drawer-width: 0px;
@@ -1655,9 +1698,72 @@ button:disabled {
   gap: 12px;
 }
 
+.pair-platform-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.pair-platform-switch button {
+  min-height: 32px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pair-platform-switch button.active {
+  background: #fff;
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(55, 53, 47, 0.12);
+}
+
+.mobile-install-card {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--surface);
+}
+
+.mobile-install-card strong {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.mobile-install-card ol {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mobile-install-card li + li {
+  margin-top: 5px;
+}
+
+.pair-qr-card {
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  margin: 0;
+}
+
+.pair-qr-card figcaption {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 .pair-qr {
   width: 208px;
   height: 208px;
+  max-width: 100%;
+  object-fit: contain;
   align-self: center;
   border: 1px solid var(--line);
   padding: 8px;

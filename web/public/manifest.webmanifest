@@ -1,0 +1,25 @@
+{
+  "name": "ForgeAgent",
+  "short_name": "ForgeAgent",
+  "description": "Private remote console for ForgeAgent running on your Mac.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f7f5",
+  "theme_color": "#37352f",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/forgeagent-hero.png",
+      "sizes": "1600x900",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/forge-agent-img.png",
+      "sizes": "2172x724",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

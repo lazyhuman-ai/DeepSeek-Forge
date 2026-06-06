@@ -368,6 +368,7 @@ function contentType(filePath: string): string {
     case ".png": return "image/png";
     case ".jpg":
     case ".jpeg": return "image/jpeg";
+    case ".webmanifest": return "application/manifest+json; charset=utf-8";
     case ".json": return "application/json; charset=utf-8";
     case ".ico": return "image/x-icon";
     default: return "application/octet-stream";

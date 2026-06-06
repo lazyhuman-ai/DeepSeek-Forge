@@ -273,18 +273,36 @@ final class CoreServiceController: ObservableObject {
 
     private func resolveNodePath() -> String {
         if let bundled = Bundle.main.resourceURL?.appendingPathComponent("node/bin/node"),
-           FileManager.default.isExecutableFile(atPath: bundled.path) {
+           executableWorks(bundled.path) {
             return bundled.path
         }
         if let env = ProcessInfo.processInfo.environment["FORGE_NODE_BIN"], !env.isEmpty {
             return env
         }
         for candidate in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
-            if FileManager.default.isExecutableFile(atPath: candidate) {
+            if executableWorks(candidate) {
                 return candidate
             }
         }
         return "/opt/homebrew/bin/node"
+    }
+
+    private func executableWorks(_ path: String) -> Bool {
+        guard FileManager.default.isExecutableFile(atPath: path) else {
+            return false
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["--version"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
     }
 
     private func postPairingCode(baseUrl: String) async throws -> AndroidPairingLink {
