@@ -54,6 +54,17 @@ export async function ensureDeviceToken(): Promise<string> {
   return pairData.token;
 }
 
+export async function pairWithCode(code: string): Promise<string> {
+  const pairResponse = await fetch("/auth/pair", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, name: DEVICE_NAME, kind: "web" }),
+  });
+  const pairData = await parseResponse<{ token: string }>(pairResponse);
+  localStorage.setItem(TOKEN_KEY, pairData.token);
+  return pairData.token;
+}
+
 export function forgetDeviceToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }

@@ -4,16 +4,16 @@
   <img src="assets/forge-agent-img.png" alt="ForgeAgent DeepSeek-native local AI agent workspace" width="100%" />
 </p>
 
-**DeepSeek-native local AI agent workspace for Mac, Chrome, Android, MCP, browser automation, long-context coding, and private multi-device workflows.**
+**DeepSeek-native local AI agent workspace for Mac, Chrome, iPhone/iPad, Android, MCP, browser automation, long-context coding, and private multi-device workflows.**
 
-ForgeAgent 是一个本地优先的 AI Agent 工作台，也是一个面向 DeepSeek 的 agent harness。它运行在你的 Mac 上，以项目文件夹为工作区，让 Agent 能在受控权限下读写文件、执行工具、使用 Chrome、调用 MCP server，并通过 Web Console、macOS App 和 Android App 多端协同。
+ForgeAgent 是一个本地优先的 AI Agent 工作台，也是一个面向 DeepSeek 的 agent harness。它运行在你的 Mac 上，以项目文件夹为工作区，让 Agent 能在受控权限下读写文件、执行工具、使用 Chrome、调用 MCP server，并通过 Web Console、macOS App、iPhone/iPad Safari/PWA 和 Android App 多端协同。
 
 如果你在寻找 **DeepSeek Agent**、**本地 AI Agent**、**Claude Code / Codex 风格工作台**、**MCP client**、**Chrome browser agent**、**long-context agent harness** 或 **Android 远程控制 Mac 上的 AI Agent**，ForgeAgent 的目标就是把这些能力合成一个本地产品。
 
 核心原则很简单：
 
 - **你的 Mac 是本体**：Forge Core 在本机运行，数据、会话、权限和工具执行都留在本地。
-- **Web Console 是统一界面**：浏览器、macOS App、Android App 都使用同一套消息流和状态展示。
+- **Web Console 是统一界面**：浏览器、macOS App、iPhone/iPad Safari/PWA、Android App 都使用同一套消息流和状态展示。
 - **项目就是文件夹**：每个项目对应一个 workspace，Agent 的文件操作和沙盒边界按项目隔离。
 - **错误对 Agent 可见**：工具失败、权限拒绝、沙盒拦截都会以可读文本回到消息流，Agent 可以尝试自我修正。
 
@@ -23,6 +23,7 @@ ForgeAgent 是一个本地优先的 AI Agent 工作台，也是一个面向 Deep
 - 多 session、多项目、多设备同步
 - 本地 Web Console，支持 Markdown、受限 HTML、代码块、文件上传和消息分叉
 - macOS App：启动或复用本机 Forge Core，并承载完整 Web Console
+- iPhone/iPad：通过 Safari 打开 Mac 上的 Web Console，并可添加到主屏幕作为 PWA 使用
 - Android App：扫码配对 Mac 后远程操作同一个 ForgeAgent
 - DeepSeek provider 配置、真实 token/context usage、cache hit 指标
 - 权限审批、session 级 Danger Free 模式、workspace sandbox
@@ -76,12 +77,37 @@ open apps/macos/ForgeAgentMac/dist/ForgeAgent.app
 
 打开 `ForgeAgent.app` 后，它会启动或复用本机 Forge Core，并在 WKWebView 中显示完整 Web Console。关闭窗口后，Core 可以继续在后台运行；Mac 真正睡眠、合盖断网或断电时，远程手机操作会中断。
 
-### 3. 配对 Android
+### 3. 在 iPhone / iPad 上使用
+
+iOS 端不需要 App Store 安装。ForgeAgent Core 仍运行在 Mac 上，iPhone/iPad 通过 Safari 连接同一套 Web Console。
+
+1. 确保 Mac 和 iPhone/iPad 在同一 Wi-Fi，或都连接到同一 Tailscale、ZeroTier、可信内网/tunnel。
+2. 在 Mac 的 Web Console 右侧状态栏打开 **Pair Mobile**，切换到 **iPhone**。
+3. 用 iPhone/iPad 相机扫描二维码。二维码会打开 Safari，并自动完成一次性配对。
+
+4. 如果没有扫码，手动在 iPhone/iPad 的 Safari 打开 **Gateway URL**，通常类似：
+
+```text
+http://192.168.x.x:3000
+```
+
+5. 手动打开时如果看到 pairing 页面，在 Mac 的 **Pair Mobile > iPhone** 面板复制 **iPhone pairing code fallback**，填到 iPhone 页面完成配对。
+6. 配对完成后，Web Console 会把设备 token 保存在 Safari 本地存储中。
+7. 在 Safari 点击分享按钮，选择 **Add to Home Screen / 添加到主屏幕**，之后可像 App 一样从桌面启动。
+
+iOS 使用说明：
+
+- Mac 必须保持 ForgeAgent Core 运行，并且不能睡眠或断网。
+- iPhone/iPad 访问的是 Mac 的私网地址，不经过 App Store。
+- iOS Safari/PWA 不支持 Android 那种常驻前台服务；锁屏后的长期业务通知需要未来接入 APNs 或其他推送方案。
+- 如果 Safari 打不开，请确认 Gateway URL 是 iPhone 可访问的 LAN/Tailscale/ZeroTier 地址，而不是 `127.0.0.1`。
+
+### 4. 配对 Android
 
 Android App 不运行 Core，它是远程设备客户端。
 
-1. 在 Mac 的 Web Console 或 macOS 菜单里打开 **Pair Android**。
-2. 在 Android App 里点击扫码。
+1. 在 Mac 的 Web Console 或 macOS 菜单里打开 **Pair Mobile**，切换到 **Android**。
+2. 在 Android App 里点击扫码，扫描二维码，或手动输入 Gateway URL 和 pairing code。
 3. 扫描二维码后，Android 会保存 Mac 地址和设备 token。
 4. 配对完成后，手机会加载同一套 Web Console。
 
@@ -235,8 +261,33 @@ npm run forgeagent -- restart
 
 - Mac 上 ForgeAgent Core 正常运行
 - 手机和 Mac 在同一局域网或同一私网/VPN
-- Web Console 的 Pair Android 使用的是手机可访问的 LAN URL
+- Web Console 的 Pair Mobile 使用的是手机可访问的 LAN URL
 - Android 通知权限和前台服务未被系统电池策略关闭
+
+### iPhone / iPad 无法打开 Web Console
+
+确认：
+
+- Mac 上 ForgeAgent Core 正常运行
+- iPhone/iPad 和 Mac 在同一局域网或同一私网/VPN
+- 使用的是 **Pair Mobile** 里显示的 LAN/Tailscale/ZeroTier Gateway URL，不是 `http://127.0.0.1:3000`
+- Mac 自己也能打开该 LAN URL，例如 `http://192.168.x.x:3000/health`
+- Safari 地址栏里能直接打开该 URL；添加到主屏幕前应先确认 Safari 可访问
+- Mac 没有被防火墙、公司网络或路由器隔离阻止 3000 端口访问
+
+如果 Mac 自己可以打开 `http://127.0.0.1:3000`，但打不开 `http://192.168.x.x:3000`，说明 gateway 只监听了 localhost。需要用局域网监听方式重启：
+
+```sh
+npm run forgeagent -- restart --host 0.0.0.0 --port 3000
+```
+
+或者重新安装 LaunchAgent：
+
+```sh
+npm run forgeagent -- install-service --host 0.0.0.0 --port 3000
+```
+
+`0.0.0.0` 会让同一网络内的设备可以连接 ForgeAgent。业务 API 仍需要 device token，但只建议在可信 Wi-Fi、Tailscale、ZeroTier 或可信内网中使用。
 
 ### Agent 不能操作文件
 
