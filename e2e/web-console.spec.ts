@@ -393,8 +393,9 @@ test.describe("ForgeAgent Web Console", () => {
 
   test("generates an Android pairing QR and deep link from the status rail", async ({ page }) => {
     await ensureToken(page);
-    await page.getByRole("button", { name: "Pair Android" }).click();
+    await page.getByRole("button", { name: "Pair Mobile" }).click();
     await expect(page.locator(".status-drawer")).toBeVisible();
+    await page.getByRole("tab", { name: "Android" }).click();
     await expect(page.locator(".pair-qr")).toBeVisible();
     const pairingLink = page.locator(".pair-field textarea");
     await expect(pairingLink).toHaveValue(/forgeagent:\/\/pair\?baseUrl=/);
