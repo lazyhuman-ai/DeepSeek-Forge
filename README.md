@@ -1,55 +1,55 @@
 # ForgeAgent
 
 <p align="center">
-  <img src="assets/forge-agent-img.png" alt="ForgeAgent DeepSeek-native local AI agent workspace" width="100%" />
+  <img src="assets/forge-agent-img.png" alt="ForgeAgent local agent workspace" width="100%" />
 </p>
 
-**DeepSeek-native local AI agent workspace for Mac, Chrome, iPhone/iPad, Android, MCP, browser automation, long-context coding, and private multi-device workflows.**
+<p align="center">
+  <strong>A local-first agent workspace for DeepSeek, MCP, Chrome, and multi-device work.</strong>
+</p>
 
-ForgeAgent 是一个本地优先的 AI Agent 工作台，也是一个面向 DeepSeek 的 agent harness。它运行在你的 Mac 上，以项目文件夹为工作区，让 Agent 能在受控权限下读写文件、执行工具、使用 Chrome、调用 MCP server，并通过 Web Console、macOS App、iPhone/iPad Safari/PWA 和 Android App 多端协同。
+<p align="center">
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-如果你在寻找 **DeepSeek Agent**、**本地 AI Agent**、**Claude Code / Codex 风格工作台**、**MCP client**、**Chrome browser agent**、**long-context agent harness** 或 **Android 远程控制 Mac 上的 AI Agent**，ForgeAgent 的目标就是把这些能力合成一个本地产品。
+ForgeAgent runs an agent core on your Mac and gives it a real workspace: project files, tools, browser access, MCP servers, long-context memory, and a durable conversation thread. The interface is a local Web Console, shared by the browser, the macOS app, iPhone/iPad Safari, and the Android app.
 
-核心原则很简单：
+It is built for people who want a Codex/Claude Code style local agent, but with first-class DeepSeek telemetry and a private, device-friendly workflow.
 
-- **你的 Mac 是本体**：Forge Core 在本机运行，数据、会话、权限和工具执行都留在本地。
-- **Web Console 是统一界面**：浏览器、macOS App、iPhone/iPad Safari/PWA、Android App 都使用同一套消息流和状态展示。
-- **项目就是文件夹**：每个项目对应一个 workspace，Agent 的文件操作和沙盒边界按项目隔离。
-- **错误对 Agent 可见**：工具失败、权限拒绝、沙盒拦截都会以可读文本回到消息流，Agent 可以尝试自我修正。
+> **Original project**
+> ForgeAgent is an original local-first agent workspace developed by the ForgeAgent contributors. It is released under the MIT License, so forks, modifications, and commercial use are welcome. If you build on ForgeAgent or present it publicly, attribution is appreciated: please mention ForgeAgent clearly where practical.
 
-## 主要能力
+## Why ForgeAgent
 
-- DeepSeek-native agent harness：真实 token usage、context usage、prefix cache hit/miss、reasoning token 和成本记录
-- 多 session、多项目、多设备同步
-- 本地 Web Console，支持 Markdown、受限 HTML、代码块、文件上传和消息分叉
-- macOS App：启动或复用本机 Forge Core，并承载完整 Web Console
-- iPhone/iPad：通过 Safari 打开 Mac 上的 Web Console，并可添加到主屏幕作为 PWA 使用
-- Android App：扫码配对 Mac 后远程操作同一个 ForgeAgent
-- DeepSeek provider 配置、真实 token/context usage、cache hit 指标
-- 权限审批、session 级 Danger Free 模式、workspace sandbox
-- Chrome/ForgeWebridge 浏览器连接，使用你本机 Chrome 的登录态
-- MCP client：连接 stdio、streamable-http、legacy SSE MCP server
-- Artifact 自动落盘：大工具输出保存为 artifact，消息流保留预览和指针
-- 长期记忆、skills、scheduler、runtime recovery、通知
+- **Your Mac is the runtime.** Sessions, files, tool results, artifacts, credentials, and device state stay on your machine.
+- **Projects are folders.** Each project maps to a workspace directory. File tools and sandbox rules are scoped around that folder.
+- **The thread is durable.** Tool calls, errors, permissions, browser events, usage, artifacts, and final answers are written back to the session.
+- **Errors are readable.** Permission denials, sandbox blocks, runtime failures, and tool errors are returned as text the agent can read and recover from.
+- **DeepSeek is not treated as a generic endpoint.** ForgeAgent reads real usage, context, cache, and reasoning-token telemetry when DeepSeek provides it.
 
-## 为什么是 DeepSeek-native
+## What You Get
 
-ForgeAgent 优先适配 DeepSeek API，而不是只把 DeepSeek 当成普通 OpenAI-compatible endpoint：
+- Local Web Console with Markdown, code blocks, safe HTML previews, file upload, session branching, and inline permission approval.
+- macOS app that starts or reuses the local Forge Core, keeps it alive with LaunchAgent, and uses a native power helper so the display may sleep while Core stays online.
+- iPhone/iPad support through Safari/PWA.
+- Android app with QR pairing, multiple saved Mac connections, background connection monitoring, and notifications.
+- DeepSeek-native token usage, context usage, prefix cache hit/miss, reasoning token, and cost ledger.
+- Workspace sandbox, session-level Danger Free mode, and reduced approval prompts for normal workspace tasks.
+- Chrome browser access through ForgeWebridge, using the Chrome profile you are already logged into.
+- MCP client support for stdio, streamable HTTP, and legacy SSE servers.
+- Local-first extension system for skills, MCP servers, and bundles.
+- Artifact storage for large tool output, with readable previews in the message thread.
+- Long-term memory, skills, scheduler, runtime recovery, and process restart rehydration.
 
-- 读取真实 `prompt_tokens`、`completion_tokens`、`total_tokens`
-- 读取 prefix cache hit/miss，用于观察缓存命中率
-- 读取 reasoning tokens，用于区分推理消耗和输出消耗
-- 使用真实 context usage 触发 compaction，避免靠粗略估算误导用户
-- compaction 后先显示本地估计的压缩后上下文占用，下一次模型调用再用 provider telemetry 校准
-- 每次模型调用写入 usage ledger，并通过 Web Console / HTTP / SSE 展示
+## Quick Start
 
-这让 ForgeAgent 更适合作为 DeepSeek 长上下文 Agent、代码工作台、浏览器自动化 Agent 和多工具 agent runtime。
+### Requirements
 
-## 快速开始
+- macOS for the main desktop runtime.
+- Node.js 20+.
+- A DeepSeek API key, or another configured provider.
 
-### 1. 从源码启动本地 Web Console
-
-需要 Node.js 20+。
+Install dependencies and start the local product:
 
 ```sh
 npm install
@@ -57,17 +57,23 @@ npm run product:build
 npm run install:local
 ```
 
-`install:local` 会构建 Web Console，安装并启动本机 LaunchAgent，然后打开：
+`install:local` builds the Web Console, installs the local LaunchAgent, starts Forge Core, and opens:
 
 ```text
 http://127.0.0.1:3000
 ```
 
-首次打开时，在界面里配置 DeepSeek API Key、Base URL、模型和上下文窗口。`.env` 仍可作为开发兼容入口，但普通用户推荐直接在 Web Console 里配置。
+Configure your provider from the setup screen. For DeepSeek, the default base URL is:
 
-### 2. 使用 macOS App
+```text
+https://api.deepseek.com
+```
 
-从源码打包：
+`.env` is still supported for development, but the Web Console setup screen is the recommended path for normal use.
+
+## macOS App
+
+Build and open the desktop app from source:
 
 ```sh
 npm run macos:build
@@ -75,87 +81,84 @@ npm run macos:package
 open apps/macos/ForgeAgentMac/dist/ForgeAgent.app
 ```
 
-打开 `ForgeAgent.app` 后，它会启动或复用本机 Forge Core，并在 WKWebView 中显示完整 Web Console。关闭窗口后，Core 可以继续在后台运行；Mac 真正睡眠、合盖断网或断电时，远程手机操作会中断。
+The macOS app is not a separate chat client. It is the desktop shell for the same Forge Core and Web Console:
 
-### 3. 在 iPhone / iPad 上使用
+- starts or reuses the local Core service;
+- installs `com.forgeagent.gateway` as a LaunchAgent;
+- listens on `0.0.0.0:3000` for private-network devices;
+- stores data in `~/Library/Application Support/ForgeAgent/data`;
+- keeps Core online with `ForgeAgentPowerHelper`, a native macOS idle-system-sleep assertion helper.
 
-iOS 端不需要 App Store 安装。ForgeAgent Core 仍运行在 Mac 上，iPhone/iPad 通过 Safari 连接同一套 Web Console。
+The display can sleep. Core should continue running. Real system sleep, lid-close sleep, network loss, or power loss will still interrupt remote access.
 
-1. 推荐先在 Mac 和 iPhone/iPad 上安装免费的 Tailscale，并登录同一个 tailnet。只在家里 Wi-Fi 使用时可以跳过。
-2. 在 Mac 的 Web Console 右侧状态栏打开 **Pair Mobile**，切换到 **iPhone**。
-3. 如果 ForgeAgent 检测到 Tailscale 地址，二维码会默认使用 Tailscale URL；否则会使用当前局域网 URL。
-4. 用 iPhone/iPad 相机扫描二维码。二维码会打开 Safari，并自动完成一次性配对。
+## Mobile Access
 
-如果没有扫码，手动在 iPhone/iPad 的 Safari 打开 **Gateway URL**，通常类似：
+ForgeAgent is local-first. Your phone connects to the Mac that is running Forge Core.
 
-```text
-http://192.168.x.x:3000
-# 或者离开家也能用的 Tailscale 地址：
-http://100.x.y.z:3000
-```
+For away-from-home access, the easiest free path is [Tailscale](https://tailscale.com/): install it on the Mac and phone, sign in to the same tailnet, then pair the phone from ForgeAgent.
 
-5. 手动打开时如果看到 pairing 页面，在 Mac 的 **Pair Mobile > iPhone** 面板复制 **iPhone pairing code fallback**，填到 iPhone 页面完成配对。
-6. 配对完成后，Web Console 会把设备 token 保存在 Safari 本地存储中。
-7. 在 Safari 点击分享按钮，选择 **Add to Home Screen / 添加到主屏幕**，之后可像 App 一样从桌面启动。
+### iPhone / iPad
 
-iOS 使用说明：
+iOS uses Safari or an installed PWA.
 
-- Mac 必须保持 ForgeAgent Core 运行，并且不能睡眠或断网。
-- iPhone/iPad 访问的是 Mac 的私网地址；Tailscale 是推荐的免费远程访问方式。
-- iOS Safari/PWA 不支持 Android 那种常驻前台服务；锁屏后的长期业务通知需要未来接入 APNs 或其他推送方案。
-- 如果 Safari 打不开，请确认 Gateway URL 是 iPhone 可访问的 LAN/Tailscale/ZeroTier 地址，而不是 `127.0.0.1`。
+1. Open **Pair Mobile** in the right rail of the Web Console.
+2. Choose **iPhone**.
+3. Scan the QR code with the camera.
+4. Safari opens the ForgeAgent Web Console and completes pairing.
+5. Optional: use **Add to Home Screen** for an app-like launcher.
 
-### 4. 配对 Android
+If Tailscale is available, ForgeAgent uses the Tailscale URL in the QR code. Otherwise it falls back to the LAN URL and clearly marks it as local-only.
 
-Android App 不运行 Core，它是远程设备客户端。
+### Android
 
-1. 推荐先在 Mac 和 Android 手机上安装免费的 Tailscale，并登录同一个 tailnet。只在同一 Wi-Fi 使用时可以跳过。
-2. 在 Mac 的 Web Console 或 macOS 菜单里打开 **Pair Mobile**，切换到 **Android**。
-3. 在 Android App 里点击扫码，扫描二维码，或手动输入 Gateway URL 和 pairing code。
-4. 扫描二维码后，Android 会保存 Mac 的 LAN、Tailscale 和自定义 remote URL，并用 `coreId` 确认没有连错电脑。
-5. 配对完成后，手机会加载同一套 Web Console。离开家后，只要 Mac 和手机的 Tailscale 都在线，Android 会自动尝试 Tailscale 地址。
-
-构建 Android APK：
+Build the Android APK:
 
 ```sh
 npm run android:build
 ```
 
-APK 路径：
+The debug APK is written to:
 
 ```text
 apps/android/ForgeAgentAndroid/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Android 后台服务会保持连接状态通知，并在 Agent 回复、权限请求、MCP elicitation 或 session blocked 时发出业务通知。手机必须能访问 Mac 的局域网、Tailscale、ZeroTier 或其他私网地址；ForgeAgent 默认推荐 Tailscale。
+Android pairing flow:
 
-## 连接 Chrome
+1. Open **Pair Mobile** on the Mac.
+2. Choose **Android**.
+3. Open the ForgeAgent Android app and scan the QR code.
+4. Android saves the Mac identity, LAN URLs, Tailscale URLs, custom remote URLs, and device token.
+5. The app loads the same Web Console as desktop.
 
-ForgeAgent 的默认浏览器能力通过 ForgeWebridge Chrome 扩展接入。它让 Agent 使用你当前 Chrome profile 中可见的登录态页面。
+The Android app keeps a foreground connection service for connectivity and activity notifications. It does not run Forge Core.
 
-打包并打开扩展目录：
+## Chrome Browser Access
+
+ForgeAgent uses a Chrome extension called ForgeWebridge for browser tasks. It connects the agent to your existing Chrome profile, including visible logged-in sessions.
+
+Package and open the extension folder:
 
 ```sh
 npm run webridge:package
 npm run webridge:open
 ```
 
-然后在 Chrome 中：
+Then in Chrome:
 
-1. 打开 `chrome://extensions`
-2. 开启 Developer mode
-3. Load unpacked，选择 ForgeWebridge 扩展目录
-4. 如果扩展已安装，点击 Reload 或 Refresh connection
+1. Open `chrome://extensions`.
+2. Enable **Developer mode**.
+3. Click **Load unpacked**.
+4. Select the ForgeWebridge extension folder.
+5. If it is already installed, click **Reload** or **Refresh connection**.
 
-扩展会自动发现本机 ForgeAgent、自动配对并保持 heartbeat。浏览器工具离线时，Agent 会收到可读错误，而不是不透明超时。
+ForgeWebridge auto-discovers the local ForgeAgent gateway and keeps a heartbeat. If it is offline, browser tools return a readable error to the agent instead of hanging.
 
-## 使用 MCP
+## MCP
 
-ForgeAgent 可以作为 MCP client 连接外部 MCP server。MCP 工具仍会走 ForgeAgent 的权限、沙盒、artifact 和 thread 机制。
+ForgeAgent is an MCP client. MCP tools are projected into the same tool runtime, permission broker, sandbox, artifact store, and thread model as built-in tools.
 
-想从零跑通一个真实 MCP 场景，可以看：[ForgeAgent + Blender MCP Quick Start](docs/blender-mcp-quickstart.md)。这份教程会从 clone 仓库、打包 macOS App、启动 Blender MCP、注册 server 到最终渲染 PNG 一步步走完。
-
-常用命令：
+Common commands:
 
 ```sh
 npm run mcp -- list
@@ -164,9 +167,13 @@ npm run mcp -- status
 npm run mcp -- doctor
 ```
 
-项目里的 `.mcp.json` 默认只会被发现，不会自动信任或启用。需要用户确认后才会进入可用工具集。
+For a real end-to-end example, see:
 
-如果你要安装 ForgeAgent 内置列表里没有的 MCP，优先从该 MCP 的官方 README、Claude Desktop 配置示例或包管理器说明里复制真实配置。关键字段是 `transport`、`command`、`args`、`env`、`url` 和鉴权方式，不要只凭 GitHub 仓库名猜命令。可以在 **Extensions** 里粘贴 npm package / GitHub link 让 ForgeAgent 尝试识别；识别不了或需要精确参数时，用 CLI 显式注册：
+- [ForgeAgent + Blender MCP Quick Start](docs/blender-mcp-quickstart.md)
+
+Project `.mcp.json` files are discovered but not blindly trusted. Enable them from the UI or CLI after reviewing the transport, command, URL, environment variables, and authentication needs.
+
+If a server is not in the built-in catalog, install it from the **Extensions** page or register it explicitly:
 
 ```sh
 DATA_DIR="$HOME/Library/Application Support/ForgeAgent/data"
@@ -182,33 +189,40 @@ npm run mcp -- add \
   --enabled
 ```
 
-HTTP / SSE MCP 也可以通过 `--transport streamable-http|sse --url <url> --headers '{"Authorization":"Bearer ..."}'` 注册。通过 CLI 修改 macOS App 的数据目录后，重启 ForgeAgent Core 让运行中的 App 重新加载配置。
+For HTTP or SSE servers, use:
 
-## 安装 Extensions：skills、tools、MCP 和 bundles
-
-普通用户推荐从 macOS App / Web Console 的 **Extensions** 页面管理扩展。这里是 ForgeAgent 的统一扩展入口，背后是 local-first registry：内置一份随 App 发布的官方/精选 snapshot，也可以添加 GitHub、HTTP JSON 或本地文件 registry source。没有中心化账号或 marketplace 依赖，安装、扫描、lock、audit 都在本机完成。
-
-- 推荐页展示 ForgeAgent 内置的真实 MCP 包、精选 GitHub skills 和 bundles
-- 搜索已安装 skill、MCP catalog、已配置 MCP server、bundle 和配置的 registry source
-- 粘贴 GitHub skill、npm MCP、GitHub MCP 或 bundle 链接后安装
-- Sources 页可添加/刷新/移除静态 registry source；Events 页记录安装、启用、刷新和失败
-- 安装和启用分离：安装只是加入 ForgeAgent，启用会新增运行能力
-- GitHub skill 会按 `SKILL.md` 所在目录安装整个 skill package，包括 `references/`、`scripts/`、`templates/`、`assets/` 等支持文件，不会只抓一个 `SKILL.md`
-- bundle 是组合包，例如一次安装一个 skill 和一个 MCP server；真实权限、沙盒和工具调用仍然走 ForgeAgent 原有机制
-- MCP server 默认安装为 disabled；需要 API key、OAuth 或连接串的 server 会标记为 setup required，配置完成前不会假装可用
-
-也可以直接在对话里自然地说：
-
-```text
-帮我安装 filesystem MCP
-帮我安装这个 GitHub skill：https://github.com/owner/repo/tree/main/skills/my-skill
-安装 code review workspace bundle，然后用它检查当前项目
-找一个适合分析 PDF 的 skill 并安装，找不到就去网上找官方来源
+```sh
+npm run mcp -- add \
+  --transport streamable-http \
+  --url https://example.com/mcp \
+  --headers '{"Authorization":"Bearer ..."}'
 ```
 
-Agent 会优先使用 `extension_search` / `extension_install` / `extension_enable`。如果你给了链接，它会顺着链接识别 GitHub skill package、npm MCP package 或 MCP catalog；如果没给链接，它会先搜索 ForgeAgent catalog，再用可用搜索/浏览工具找官方来源。不要让 Agent 用 `npm install`、`curl | sh` 这类 shell 命令绕过扩展管理，除非扩展工具明确告诉它必须手动安装。
+Restart Forge Core after changing the macOS app data directory from the CLI.
 
-CLI 入口：
+## Extensions
+
+ForgeAgent has a local-first extension system for skills, MCP servers, and bundles. The macOS app and Web Console include an **Extensions** page with:
+
+- recommended entries from the bundled registry snapshot;
+- installed extensions;
+- setup-required entries;
+- warning and blocked states;
+- registry sources;
+- install and audit events.
+
+You can also ask the agent naturally:
+
+```text
+Install filesystem MCP.
+Install this GitHub skill: https://github.com/owner/repo/tree/main/skills/my-skill
+Install the code review workspace bundle and use it on this project.
+Find a PDF research extension, install it, and use it on this file.
+```
+
+ForgeAgent installs GitHub skills as full packages. If `SKILL.md` lives in a directory, supporting files such as `references/`, `scripts/`, `templates/`, `assets/`, and `tests/` are installed with it. It does not reduce a skill to a raw `SKILL.md` download.
+
+CLI examples:
 
 ```sh
 npm run extensions -- status
@@ -217,35 +231,58 @@ npm run extensions -- install-skill-github https://github.com/owner/repo/tree/ma
 npm run extensions -- install-bundle code-review-workspace
 npm run extensions -- install-mcp-catalog modelcontextprotocol-filesystem
 npm run extensions -- enable mcp_server filesystem
-npm run extensions -- sources
-npm run extensions -- add-source my-registry --kind http --url https://example.com/forge-extension-registry.json
-npm run extensions -- refresh-source my-registry
 npm run extensions -- doctor
 ```
 
-当前内置推荐包括：
+Built-in recommendations currently include:
 
-- MCP：Filesystem、Everything、Memory、Sequential Thinking、GitHub、Brave Search、Puppeteer、Postgres、PDF、Map、Three.js、Blender
-- Skills：Serenity Invest、Code Reviewer、Frontend Design
-- Bundles：Code Review Workspace、Design Reference、Investor Research、PDF Research
+- MCP: Filesystem, Everything, Memory, Sequential Thinking, GitHub, Brave Search, Puppeteer, Postgres, PDF, Map, Three.js, Blender.
+- Skills: Serenity Invest, Code Reviewer, Frontend Design.
+- Bundles: Code Review Workspace, Design Reference, Investor Research, PDF Research.
 
-## 数据和安全
+## DeepSeek Telemetry
 
-- 本地源码运行默认数据目录：`.forge/`
-- macOS App 默认数据目录：`~/Library/Application Support/ForgeAgent/data`
-- API Key 保存在本机配置中，状态和诊断接口只返回 masked key
-- HTTP Gateway 是单用户、多设备模型，业务 API 默认需要 device token
-- Pairing code 是一次性、短时有效
-- Danger Free 是 session 级开关，只影响当前 session 的审批策略
-- Workspace sandbox 会限制文件工具访问项目根和 session scratch workspace
+DeepSeek support is a first-class path in ForgeAgent:
 
-ForgeAgent V1 是本地/私网优先产品，不是 SaaS 多用户服务。手机离开家后继续使用，推荐安装免费的 Tailscale，让手机和 Mac 处在同一个私有 tailnet。高级用户也可以通过 `FORGE_REMOTE_URLS` 配置 Cloudflare Tunnel、ZeroTier hostname 或 HTTPS reverse proxy，但不要直接公网端口转发 ForgeAgent。
+- `prompt_tokens`, `completion_tokens`, and `total_tokens`;
+- prefix cache hit/miss tokens;
+- reasoning tokens;
+- cost and usage records;
+- real context-window percentage;
+- compaction based on real provider usage when available.
 
-## 常见问题
+When compaction happens, ForgeAgent shows a local estimate of the compressed context immediately, then replaces it with real provider telemetry after the next model call.
 
-### 打不开 Web Console
+## Data and Security Model
 
-先检查服务状态和日志：
+ForgeAgent is designed for one user and multiple personal devices.
+
+- Source checkout data directory: `.forge/`
+- macOS app data directory: `~/Library/Application Support/ForgeAgent/data`
+- API keys stay on the local machine and are masked in status/diagnostic responses.
+- Business HTTP APIs require a device token.
+- Pairing codes are short-lived and one-time use.
+- Workspace sandboxing is scoped to the project folder and session scratch space.
+- Permission denials and sandbox blocks are returned to the agent as readable `tool_result` errors.
+- Danger Free is session-scoped. It reduces approvals for that session, but hard sandbox blocks still apply.
+
+ForgeAgent is not a hosted SaaS service. Do not expose it directly to the public internet. For remote phone access, use Tailscale, ZeroTier, a trusted private network, or a carefully configured HTTPS reverse proxy.
+
+## Useful Commands
+
+```sh
+npm run status          # local service status
+npm run doctor          # diagnostics
+npm run logs            # gateway logs
+npm run start           # start one local background gateway
+npm run stop            # stop it
+npm run forgeagent -- restart
+npm run check           # typecheck, product build, unit tests, UI e2e
+```
+
+## Troubleshooting
+
+### Web Console does not open
 
 ```sh
 npm run status
@@ -253,55 +290,40 @@ npm run doctor
 npm run logs
 ```
 
-如果服务异常，可以重启：
+Restart the local service:
 
 ```sh
 npm run forgeagent -- restart
 ```
 
-### Android 无法连接 Mac
+### Phone cannot connect to the Mac
 
-确认：
+Check that:
 
-- Mac 上 ForgeAgent Core 正常运行
-- 手机和 Mac 在同一局域网，或两边 Tailscale/ZeroTier 都在线
-- Web Console 的 Pair Mobile 显示 `Tailscale ready` 或使用的是手机可访问的 Gateway URL
-- Android 通知权限和前台服务未被系统电池策略关闭
-- 如果离开家后不可用，打开 Android 离线页里的 **Set up Tailscale** 或给当前 connection 添加一个 trusted remote URL
+- Forge Core is running on the Mac.
+- The phone can reach the displayed LAN or Tailscale URL.
+- The URL is not `127.0.0.1` on the phone.
+- Tailscale or ZeroTier is online on both devices if you are away from home.
+- The Mac is awake. Display sleep is fine; real system sleep is not.
+- macOS firewall or network isolation is not blocking port `3000`.
 
-### iPhone / iPad 无法打开 Web Console
+### Agent cannot access a file
 
-确认：
+Check the current project. File tools are sandboxed around the selected project folder. Move the file into the project or create a project for the folder you want the agent to work in.
 
-- Mac 上 ForgeAgent Core 正常运行
-- iPhone/iPad 和 Mac 在同一局域网，或两边 Tailscale/ZeroTier 都在线
-- 使用的是 **Pair Mobile** 里显示的 LAN/Tailscale/ZeroTier Gateway URL，不是 `http://127.0.0.1:3000`
-- Mac 自己也能打开该 LAN URL，例如 `http://192.168.x.x:3000/health`
-- Safari 地址栏里能直接打开该 URL；添加到主屏幕前应先确认 Safari 可访问
-- Mac 没有被防火墙、公司网络或路由器隔离阻止 3000 端口访问
+## Documentation
 
-如果 Mac 自己可以打开 `http://127.0.0.1:3000`，但打不开 `http://192.168.x.x:3000`，说明 gateway 只监听了 localhost。需要用局域网监听方式重启：
+- [Development Guide](docs/development.md)
+- [Architecture Spec](docs/forge_agent_v_2_architecture_spec.md)
+- [Native Apps](docs/native-apps.md)
+- [Blender MCP Quick Start](docs/blender-mcp-quickstart.md)
 
-```sh
-npm run forgeagent -- restart --host 0.0.0.0 --port 3000
-```
+## License
 
-或者重新安装 LaunchAgent：
+ForgeAgent is released under the [MIT License](LICENSE). Forks, modifications, private use, and commercial use are welcome. If you build on ForgeAgent or present it publicly, attribution is appreciated.
 
-```sh
-npm run forgeagent -- install-service --host 0.0.0.0 --port 3000
-```
+## Project Status
 
-`0.0.0.0` 会让同一网络内的设备可以连接 ForgeAgent。业务 API 仍需要 device token，但只建议在可信 Wi-Fi、Tailscale、ZeroTier 或可信内网中使用。
+ForgeAgent is an early local-first product. It is already usable for real local workflows, but the surface area is large: macOS app, Web Console, Android app, Chrome extension, MCP, skills, browser automation, memory, and runtime recovery. Expect rapid changes.
 
-### Agent 不能操作文件
-
-确认当前 session 属于正确项目。ForgeAgent 按项目文件夹建立 workspace sandbox，项目外路径会被拦截，除非用户明确扩大权限。
-
-## 开发者文档
-
-面向使用者的 README 只保留安装和使用路径。开发、测试、架构和发布 gate 见：
-
-- [开发指南](docs/development.md)
-- [架构规范](docs/forge_agent_v_2_architecture_spec.md)
-- [原生 App 说明](docs/native-apps.md)
+Contributions, bug reports, and real workflow reports are welcome.
