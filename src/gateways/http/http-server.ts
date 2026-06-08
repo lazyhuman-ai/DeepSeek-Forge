@@ -18,6 +18,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -46,6 +47,13 @@ import {
 } from "../../config/provider-config-store.js";
 import type { McpCatalogEntry, McpLaunchMode, McpServerConfig, McpTransportKind, McpTrust } from "../../mcp/types.js";
 import type { ExtensionInstallInput, ExtensionKind } from "../../extensions/types.js";
+import {
+  resolveVoiceTranscriptionOptions,
+  transcribeVoiceAudio,
+  voiceTranscriptionOptionsFromEnv,
+  type ResolvedVoiceTranscriptionOptions,
+  type VoiceTranscriptionOptions,
+} from "../../voice/voice-transcription.js";
 
 const execFileAsync = (file: string, args: string[], options?: { timeout?: number; maxBuffer?: number }): Promise<{ stdout: string; stderr: string }> =>
   new Promise((resolve, reject) => {
@@ -79,6 +87,7 @@ export type HttpServerOptions = {
   providerConfigStore?: ProviderConfigStore;
   applyProviderConfig?: (status: SetupStatus) => void;
   testProviderConfig?: (input: ProviderConfigInput) => Promise<{ ok: boolean; message: string }>;
+  voiceTranscription?: VoiceTranscriptionOptions;
   discovery?: {
     host?: string;
     port?: number;
@@ -103,6 +112,7 @@ type ResolvedHttpServerOptions = {
   providerConfigStore: ProviderConfigStore;
   applyProviderConfig?: (status: SetupStatus) => void;
   testProviderConfig?: (input: ProviderConfigInput) => Promise<{ ok: boolean; message: string }>;
+  voiceTranscription: ResolvedVoiceTranscriptionOptions;
   discovery: {
     host?: string;
     port?: number;
@@ -201,6 +211,10 @@ function resolveOptions(options?: HttpServerOptions): ResolvedHttpServerOptions 
     enableUi: options?.enableUi ?? Boolean(options?.uiDir),
     uiDir: pathResolve(options?.uiDir ?? join(process.cwd(), "web", "dist")),
     providerConfigStore: options?.providerConfigStore ?? new ProviderConfigStore(join(dataDir, "config")),
+    voiceTranscription: resolveVoiceTranscriptionOptions({
+      ...voiceTranscriptionOptionsFromEnv(),
+      ...(options?.voiceTranscription ?? {}),
+    }),
     discovery: {
       ...(options?.discovery ?? {}),
       dataDir,
@@ -375,6 +389,7 @@ const API_ROUTE_PREFIXES = new Set([
   "skill-sources",
   "skills",
   "system-events",
+  "voice",
   "webridge",
 ]);
 
@@ -415,6 +430,21 @@ function contentType(filePath: string): string {
     case ".ico": return "image/x-icon";
     default: return "application/octet-stream";
   }
+}
+
+function audioExtension(mimeType: string, filename: string): string {
+  const ext = extname(filename).toLowerCase();
+  if (/^\.[a-z0-9]+$/.test(ext)) return ext;
+  if (mimeType.includes("webm")) return ".webm";
+  if (mimeType.includes("mp4")) return ".mp4";
+  if (mimeType.includes("mpeg") || mimeType.includes("mp3")) return ".mp3";
+  if (mimeType.includes("wav")) return ".wav";
+  if (mimeType.includes("ogg")) return ".ogg";
+  return ".audio";
+}
+
+function voiceTempDir(options: ResolvedHttpServerOptions): string {
+  return join(options.discovery.dataDir ?? ".forge", "voice");
 }
 
 function missingUiHtml(): string {
@@ -633,6 +663,12 @@ function matchRoute(method: string, reqUrl: string): RouteMatch | null {
     }
     if (method === "POST" && segments.length === 2 && s(1) === "stream-token") {
       return { handler: "createStreamToken", params: {} };
+    }
+  }
+
+  if (segments.length >= 1 && s(0) === "voice") {
+    if (method === "POST" && segments.length === 2 && s(1) === "transcriptions") {
+      return { handler: "transcribeVoice", params: {} };
     }
   }
 
@@ -2510,6 +2546,33 @@ async function handleRoute(
         mimeType: file.contentType,
       }));
       sendJson(res, 201, { files: uploaded }, origin);
+      return;
+    }
+
+    case "transcribeVoice": {
+      if (!options.voiceTranscription.enabled) {
+        sendError(res, 503, "Local voice input is disabled.", origin);
+        return;
+      }
+      const files = await parseMultipartFiles(req, options.voiceTranscription.maxBodyBytes);
+      const audio = files.find((file) => file.fieldName === "audio") ?? files[0];
+      if (!audio) {
+        sendError(res, 400, "No audio file was uploaded.", origin);
+        return;
+      }
+      const dir = voiceTempDir(options);
+      mkdirSync(dir, { recursive: true });
+      const audioPath = join(dir, `voice-${randomUUID()}${audioExtension(audio.contentType, audio.filename)}`);
+      writeFileSync(audioPath, audio.data);
+      try {
+        const transcript = await transcribeVoiceAudio({
+          audioPath,
+          mimeType: audio.contentType,
+        }, options.voiceTranscription);
+        sendJson(res, 200, transcript, origin);
+      } finally {
+        rmSync(audioPath, { force: true });
+      }
       return;
     }
 

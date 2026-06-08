@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import http from "node:http";
 import { once } from "node:events";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CoreAPI } from "../../src/core/core-api.js";
@@ -23,6 +23,7 @@ let server: http.Server;
 let api: CoreAPI;
 let gateway: HttpGateway;
 let applied: SetupStatus[];
+let voiceInputs: Array<{ audioPath: string; mimeType: string; existsDuringCall: boolean }>;
 
 function request(method: string, path: string, body?: unknown): Promise<ResponseData> {
   return new Promise((resolve, reject) => {
@@ -54,6 +55,63 @@ function request(method: string, path: string, body?: unknown): Promise<Response
   });
 }
 
+function requestRaw(
+  method: string,
+  path: string,
+  rawBody: string | Buffer,
+  headers: Record<string, string>,
+): Promise<ResponseData> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(path, baseUrl);
+    const req = http.request(
+      url,
+      {
+        method,
+        headers,
+        timeout: 5000,
+      },
+      (res) => {
+        let raw = "";
+        res.on("data", (chunk) => (raw += chunk));
+        res.on("end", () => {
+          try {
+            resolve({ status: res.statusCode!, data: raw ? JSON.parse(raw) : null, headers: res.headers });
+          } catch {
+            resolve({ status: res.statusCode!, data: raw, headers: res.headers });
+          }
+        });
+      },
+    );
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("Request timed out")); });
+    req.write(rawBody);
+    req.end();
+  });
+}
+
+function multipartBody(files: Array<{ field: string; filename: string; contentType: string; content: string | Buffer }>): {
+  body: Buffer;
+  contentType: string;
+} {
+  const boundary = `----forgeagent-${Math.random().toString(16).slice(2)}`;
+  const chunks: Buffer[] = [];
+  for (const file of files) {
+    chunks.push(Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="${file.field}"; filename="${file.filename}"\r\n` +
+      `Content-Type: ${file.contentType}\r\n\r\n`,
+      "utf-8",
+    ));
+    chunks.push(Buffer.isBuffer(file.content) ? file.content : Buffer.from(file.content, "utf-8"));
+    chunks.push(Buffer.from("\r\n", "utf-8"));
+  }
+  chunks.push(Buffer.from(`--${boundary}--\r\n`, "utf-8"));
+  return {
+    body: Buffer.concat(chunks),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
+
 describe("HTTP product UI contract", () => {
   beforeEach(async () => {
     root = mkdtempSync(join(tmpdir(), "forgeagent-product-ui-"));
@@ -63,6 +121,7 @@ describe("HTTP product UI contract", () => {
     writeFileSync(join(uiDir, "assets", "app.js"), "console.log('ok')", "utf-8");
 
     applied = [];
+    voiceInputs = [];
     api = new CoreAPI(new ToolRegistry(), { dataDir: join(root, "data") });
     api.initMemoryManager({ autoRun: false });
     api.initSkillEcosystem({ autoRun: false });
@@ -77,6 +136,18 @@ describe("HTTP product UI contract", () => {
         applied.push(status);
       },
       testProviderConfig: vi.fn(async () => ({ ok: true, message: "Provider test succeeded." })),
+      voiceTranscription: {
+        model: "local-belle",
+        language: "zh",
+        transcribe: async (input) => {
+          voiceInputs.push({
+            audioPath: input.audioPath,
+            mimeType: input.mimeType,
+            existsDuringCall: existsSync(input.audioPath),
+          });
+          return { text: "你好 ForgeAgent", model: "local-belle", language: "zh" };
+        },
+      },
     });
     server.listen(0);
     await once(server, "listening");
@@ -168,6 +239,27 @@ describe("HTTP product UI contract", () => {
 
     expect(renamed.status).toBe(200);
     expect(renamed.data).toMatchObject({ id, title: "Readable title" });
+  });
+
+  it("transcribes voice input through the local voice route", async () => {
+    const multipart = multipartBody([
+      {
+        field: "audio",
+        filename: "voice.webm",
+        contentType: "audio/webm",
+        content: Buffer.from([1, 2, 3, 4]),
+      },
+    ]);
+
+    const transcribed = await requestRaw("POST", "/voice/transcriptions", multipart.body, {
+      "Content-Type": multipart.contentType,
+    });
+
+    expect(transcribed.status).toBe(200);
+    expect(transcribed.data).toEqual({ text: "你好 ForgeAgent", model: "local-belle", language: "zh" });
+    expect(voiceInputs).toHaveLength(1);
+    expect(voiceInputs[0]).toMatchObject({ mimeType: "audio/webm", existsDuringCall: true });
+    expect(existsSync(voiceInputs[0]!.audioPath)).toBe(false);
   });
 
   it("lists and reads session artifacts through authenticated product routes", async () => {

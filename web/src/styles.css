@@ -1509,6 +1509,152 @@ button:disabled {
   border-color: transparent;
 }
 
+.composer-input-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
+}
+
+.voice-input-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  margin-top: 5px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid #d8d4ca;
+  background: linear-gradient(180deg, #fff, #f8f7f4);
+  color: #6d695f;
+  box-shadow: 0 1px 1px rgb(35 32 26 / 5%);
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    box-shadow 140ms ease,
+    transform 140ms ease;
+}
+
+.voice-input-button:hover:not(:disabled) {
+  border-color: #bdb7aa;
+  color: #2f2c27;
+  background: linear-gradient(180deg, #fff, #f2f0ea);
+  box-shadow: 0 2px 5px rgb(35 32 26 / 9%);
+  transform: translateY(-1px);
+}
+
+.voice-input-button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgb(35 32 26 / 8%);
+}
+
+.voice-input-button:focus-visible {
+  outline: 2px solid rgb(47 44 39 / 18%);
+  outline-offset: 2px;
+}
+
+.voice-input-button.recording {
+  border-color: #d65e54;
+  color: #b43e37;
+  background: linear-gradient(180deg, #fff7f5, #ffece8);
+  box-shadow: 0 0 0 3px rgb(214 94 84 / 10%);
+}
+
+.voice-input-button.recording::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d55c52;
+  box-shadow: 0 0 0 3px rgb(213 92 82 / 13%);
+}
+
+.voice-input-button.transcribing {
+  border-color: #bdb7aa;
+  color: #2f2c27;
+  background: linear-gradient(180deg, #fff, #f3f1eb);
+}
+
+.voice-input-button.transcribing .voice-sketch {
+  animation: voice-pulse 1s ease-in-out infinite;
+}
+
+.voice-sketch {
+  position: relative;
+  width: 18px;
+  height: 22px;
+  color: inherit;
+}
+
+.voice-sketch-capsule {
+  position: absolute;
+  top: 0;
+  left: 5px;
+  width: 8px;
+  height: 12px;
+  border: 1.75px solid currentColor;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 45%);
+}
+
+.voice-sketch-capsule::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  width: 2px;
+  height: 4px;
+  border-radius: 2px;
+  background: currentColor;
+  opacity: 0.45;
+  transform: translateX(-50%);
+}
+
+.voice-sketch-stem {
+  position: absolute;
+  left: 2px;
+  top: 6px;
+  width: 14px;
+  height: 10px;
+  border: 1.75px solid currentColor;
+  border-top: 0;
+  border-radius: 0 0 9px 9px;
+}
+
+.voice-sketch-stem::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 9px;
+  width: 1.75px;
+  height: 4px;
+  border-radius: 2px;
+  background: currentColor;
+  transform: translateX(-50%);
+}
+
+.voice-sketch-base {
+  position: absolute;
+  left: 4px;
+  bottom: 0;
+  width: 10px;
+  height: 1.75px;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+@keyframes voice-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
 .composer textarea {
   width: 100%;
   border: 0;

@@ -31,6 +31,7 @@ import type {
 type LoadState = "booting" | "ready" | "error";
 type MainView = "chat" | "extensions";
 type RailPanel = "provider" | "android" | "browser" | "mcp" | "context" | "permissions" | "notifications" | "memory" | "skills";
+type VoiceInputState = "idle" | "recording" | "transcribing";
 
 const LEFT_COLLAPSED_KEY = "forgeagent.web.leftCollapsed";
 
@@ -75,6 +76,14 @@ function selectedBranchMap(state: DeviceState | null, sessionId: string, branchI
     ...(state?.selectedBranchBySession ?? {}),
     [sessionId]: branchId,
   };
+}
+
+function mergeVoiceDraft(current: string, transcript: string): string {
+  const text = transcript.trim();
+  if (!text) return current;
+  if (!current.trim()) return text;
+  const separator = /[\s\n]$/.test(current) ? "" : " ";
+  return `${current}${separator}${text}`;
 }
 
 function withDeviceStateDefaults(state: DeviceState): DeviceState {
@@ -152,6 +161,7 @@ export function App() {
   const [pendingPermissions, setPendingPermissions] = useState<PermissionRequest[]>([]);
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<File[]>([]);
+  const [voiceState, setVoiceState] = useState<VoiceInputState>("idle");
   const [editingSeq, setEditingSeq] = useState<number | null>(null);
   const [editingDraft, setEditingDraft] = useState("");
   const [sessionQuery, setSessionQuery] = useState("");
@@ -185,6 +195,9 @@ export function App() {
   const stickToBottomRef = useRef(true);
   const draftRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const voiceRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceChunksRef = useRef<BlobPart[]>([]);
+  const voiceStreamRef = useRef<MediaStream | null>(null);
   const terminalScrollRef = useRef<HTMLDivElement | null>(null);
   const terminalPaneRef = useRef<HTMLDivElement | null>(null);
   const terminalSourceRef = useRef<EventSource | null>(null);
@@ -217,6 +230,12 @@ export function App() {
     if (!query) return scoped;
     return scoped.filter((session) => session.title.toLowerCase().includes(query));
   }, [selectedProjectId, sessionQuery, sessions]);
+  const voiceButtonLabel = voiceState === "recording"
+    ? "Stop voice input"
+    : voiceState === "transcribing"
+      ? "Transcribing voice input"
+      : "Start voice input";
+  const voiceDisabled = busy || selected?.status === "running" || voiceState === "transcribing";
 
   useEffect(() => {
     localStorage.setItem(LEFT_COLLAPSED_KEY, leftCollapsed ? "1" : "0");
@@ -666,6 +685,7 @@ export function App() {
     return () => {
       terminalSourceRef.current?.close();
       terminalSourceRef.current = null;
+      stopVoiceStream();
     };
   }, []);
 
@@ -676,6 +696,65 @@ export function App() {
       if (scroll) scroll.scrollTop = scroll.scrollHeight;
     });
   }, [terminalEvents, terminalOpen]);
+
+  function stopVoiceStream() {
+    voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+    voiceStreamRef.current = null;
+  }
+
+  async function toggleVoiceInput() {
+    if (voiceState === "recording") {
+      voiceRecorderRef.current?.stop();
+      return;
+    }
+    if (voiceState !== "idle" || busy || selected?.status === "running") return;
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setError("Voice input is not available in this browser.");
+      return;
+    }
+    setError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      voiceStreamRef.current = stream;
+      voiceRecorderRef.current = recorder;
+      voiceChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) voiceChunksRef.current.push(event.data);
+      };
+      recorder.onerror = () => {
+        setError("Voice recording failed.");
+        setVoiceState("idle");
+        stopVoiceStream();
+      };
+      recorder.onstop = () => {
+        const mimeType = recorder.mimeType || "audio/webm";
+        const blob = new Blob(voiceChunksRef.current, { type: mimeType });
+        voiceRecorderRef.current = null;
+        voiceChunksRef.current = [];
+        stopVoiceStream();
+        if (blob.size === 0) {
+          setVoiceState("idle");
+          return;
+        }
+        setVoiceState("transcribing");
+        void api.transcribeVoice(blob).then((result) => {
+          setDraft((current) => mergeVoiceDraft(current, result.text));
+          draftRef.current?.focus();
+        }).catch((err) => {
+          setError(err instanceof Error ? err.message : String(err));
+        }).finally(() => {
+          setVoiceState("idle");
+        });
+      };
+      recorder.start();
+      setVoiceState("recording");
+    } catch (err) {
+      stopVoiceStream();
+      setVoiceState("idle");
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   async function submitMessage() {
     const text = draft.trim();
@@ -1449,17 +1528,34 @@ export function App() {
               ))}
             </div>
           ) : null}
-          <textarea
-            ref={draftRef}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder={selected?.status === "running" ? "ForgeAgent is running…" : "Ask ForgeAgent anything…"}
-            rows={1}
-            disabled={selected?.status === "running"}
-            onCompositionStart={composerEnterSubmit.onCompositionStart}
-            onCompositionEnd={composerEnterSubmit.onCompositionEnd}
-            onKeyDown={composerEnterSubmit.onKeyDown}
-          />
+          <div className="composer-input-row">
+            <button
+              type="button"
+              className={`voice-input-button ${voiceState}`}
+              title={voiceButtonLabel}
+              aria-label={voiceButtonLabel}
+              aria-pressed={voiceState === "recording"}
+              disabled={voiceDisabled}
+              onClick={() => void toggleVoiceInput()}
+            >
+              <span className="voice-sketch" aria-hidden="true">
+                <span className="voice-sketch-capsule" />
+                <span className="voice-sketch-stem" />
+                <span className="voice-sketch-base" />
+              </span>
+            </button>
+            <textarea
+              ref={draftRef}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder={selected?.status === "running" ? "ForgeAgent is running…" : "Ask ForgeAgent anything…"}
+              rows={1}
+              disabled={selected?.status === "running"}
+              onCompositionStart={composerEnterSubmit.onCompositionStart}
+              onCompositionEnd={composerEnterSubmit.onCompositionEnd}
+              onKeyDown={composerEnterSubmit.onKeyDown}
+            />
+          </div>
           <div className="composer-actions">
             <button
               className="send-button"

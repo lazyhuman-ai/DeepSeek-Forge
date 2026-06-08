@@ -26,6 +26,7 @@ export default defineConfig({
       "/skills": "http://127.0.0.1:3000",
       "/skill-sources": "http://127.0.0.1:3000",
       "/skill-events": "http://127.0.0.1:3000",
+      "/voice": "http://127.0.0.1:3000",
       "/webridge": "http://127.0.0.1:3000",
       "/diagnostics": "http://127.0.0.1:3000",
       "/artifacts": "http://127.0.0.1:3000",

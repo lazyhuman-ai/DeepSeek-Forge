@@ -66,6 +66,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>ForgeAgent uses the microphone to turn your voice input into chat text on this Mac.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key>

@@ -83,7 +83,7 @@ struct WebConsoleView: NSViewRepresentable {
             _ webView: WKWebView,
             runJavaScriptAlertPanelWithMessage message: String,
             initiatedByFrame frame: WKFrameInfo,
-            completionHandler: @escaping @Sendable () -> Void
+            completionHandler: @escaping @MainActor @Sendable () -> Void
         ) {
             let alert = NSAlert()
             alert.messageText = "ForgeAgent"
@@ -99,7 +99,7 @@ struct WebConsoleView: NSViewRepresentable {
             _ webView: WKWebView,
             runJavaScriptConfirmPanelWithMessage message: String,
             initiatedByFrame frame: WKFrameInfo,
-            completionHandler: @escaping @Sendable (Bool) -> Void
+            completionHandler: @escaping @MainActor @Sendable (Bool) -> Void
         ) {
             let alert = NSAlert()
             alert.messageText = "ForgeAgent"
@@ -146,6 +146,17 @@ struct WebConsoleView: NSViewRepresentable {
             panel.begin { response in
                 completionHandler(response == .OK ? panel.urls : nil)
             }
+        }
+
+        @available(macOS 12.0, *)
+        func webView(
+            _ webView: WKWebView,
+            requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+            initiatedByFrame frame: WKFrameInfo,
+            type: WKMediaCaptureType,
+            decisionHandler: @escaping @MainActor @Sendable (WKPermissionDecision) -> Void
+        ) {
+            decisionHandler(type == .microphone ? .grant : .prompt)
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {

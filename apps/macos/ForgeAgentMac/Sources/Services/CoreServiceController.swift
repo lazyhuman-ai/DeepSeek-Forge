@@ -167,6 +167,7 @@ final class CoreServiceController: ObservableObject {
         try bootoutLaunchAgent(allowFailure: true)
         terminateStaleBundledCoreProcesses()
         currentPort = chooseAvailablePort()
+        try writeVoiceTranscribeScript()
         try writeLaunchScript()
         try renderPlist().write(to: plistURL, atomically: true, encoding: .utf8)
         _ = try run("/bin/launchctl", ["bootstrap", launchdDomain(), plistURL.path])
@@ -232,6 +233,15 @@ final class CoreServiceController: ObservableObject {
         let powerHelper = resolvePowerHelperPath()
         let tsx = coreRoot.appendingPathComponent("node_modules/tsx/dist/cli.mjs").path
         let main = coreRoot.appendingPathComponent("src/gateways/http/main.ts").path
+        let voicePython = supportDirectory
+            .appendingPathComponent("voice-venv/bin/python")
+            .path
+        let voiceModel = supportDirectory
+            .appendingPathComponent("models/belle-whisper-large-v3-turbo-zh-ggml-q5_0/ggml-belle-large-v3-turbo-zh-q5_0.bin")
+            .path
+        let voiceTranscribe = supportDirectory
+            .appendingPathComponent("voice-transcribe.sh")
+            .path
         let launchCommand: String
         if let powerHelper {
             launchCommand = """
@@ -250,11 +260,43 @@ final class CoreServiceController: ObservableObject {
         export HTTP_PORT='\(currentPort)'
         export HOME='\(shellQuote(FileManager.default.homeDirectoryForCurrentUser.path))'
         export PATH='/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
+        export FORGE_VOICE_PYTHON='\(shellQuote(voicePython))'
+        export FORGE_WHISPER_MODEL='\(shellQuote(voiceModel))'
+        export FORGE_VOICE_TRANSCRIBE_COMMAND='\(shellQuote(voiceTranscribe))'
+        export FORGE_VOICE_TRANSCRIBE_ARGS='{audio} {model} {language}'
         cd '\(shellQuote(coreRoot.path))'
         \(launchCommand)
         """
         try script.write(to: launchScriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launchScriptURL.path)
+    }
+
+    private func writeVoiceTranscribeScript() throws {
+        let scriptURL = supportDirectory.appendingPathComponent("voice-transcribe.sh")
+        let script = """
+        #!/bin/zsh
+        set -euo pipefail
+        AUDIO="$1"
+        MODEL="$2"
+        LANG="${3:-zh}"
+        WORKDIR="$(dirname "$AUDIO")"
+        EXT="${AUDIO:e:l}"
+        INPUT="$AUDIO"
+        TMP=""
+        if [[ "$EXT" != "wav" && "$EXT" != "mp3" && "$EXT" != "ogg" && "$EXT" != "flac" ]]; then
+          TMP="$WORKDIR/voice-transcribe-$$.wav"
+          /opt/homebrew/bin/ffmpeg -y -loglevel error -i "$AUDIO" -ar 16000 -ac 1 "$TMP"
+          INPUT="$TMP"
+        fi
+        cleanup() {
+          if [[ -n "$TMP" && -f "$TMP" ]]; then rm -f "$TMP"; fi
+        }
+        trap cleanup EXIT
+        cd "$WORKDIR"
+        /opt/homebrew/bin/whisper-cli -m "$MODEL" -f "$INPUT" -l "$LANG" -nt -np
+        """
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
     }
 
     private func renderPlist() -> String {

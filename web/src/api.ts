@@ -169,6 +169,15 @@ export const api = {
       body: form,
     });
   },
+  transcribeVoice: (audio: Blob) => {
+    const form = new FormData();
+    const extension = audio.type.includes("mp4") ? "mp4" : audio.type.includes("ogg") ? "ogg" : "webm";
+    form.append("audio", audio, `voice-input.${extension}`);
+    return apiFetch<{ text: string; model: string; language: string }>("/voice/transcriptions", {
+      method: "POST",
+      body: form,
+    });
+  },
   interrupt: (sessionId: string) => apiFetch<Record<string, unknown>>(`/sessions/${sessionId}/interrupt`, { method: "POST" }),
   retry: (sessionId: string) => apiFetch<Record<string, unknown>>(`/sessions/${sessionId}/retry`, { method: "POST" }),
   pendingPermissions: () => apiFetch<PermissionRequest[]>("/permission-requests?status=pending"),
