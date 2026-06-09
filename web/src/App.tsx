@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent, RefObject } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
 import QRCode from "qrcode";
 import { api, ensureDeviceToken, forgetDeviceToken, pairWithCode } from "./api";
 import { AssistantContent } from "./AssistantContent";
@@ -36,6 +36,14 @@ type VoiceInputState = "idle" | "recording" | "transcribing";
 type VoiceSampleChunk = { start: number; end: number; samples: Float32Array };
 
 const LEFT_COLLAPSED_KEY = "forgeagent.web.leftCollapsed";
+const LEFT_WIDTH_KEY = "forgeagent.web.leftWidth";
+const RIGHT_WIDTH_KEY = "forgeagent.web.rightWidth";
+const LEFT_WIDTH_DEFAULT = 248;
+const RIGHT_WIDTH_DEFAULT = 304;
+const LEFT_WIDTH_MIN = 196;
+const LEFT_WIDTH_MAX = 340;
+const RIGHT_WIDTH_MIN = 240;
+const RIGHT_WIDTH_MAX = 420;
 const VOICE_PREVIEW_INTERVAL_MS = 2_000;
 const VOICE_PREVIEW_WINDOW_SECONDS = 10;
 const VOICE_PREVIEW_MAX_BYTES = 8 * 1024 * 1024;
@@ -161,6 +169,16 @@ function compactNumber(value: number | undefined): string {
   return String(value);
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function storedWidth(key: string, fallback: number, min: number, max: number): number {
+  const stored = Number(localStorage.getItem(key));
+  if (Number.isFinite(stored)) return clampNumber(stored, min, max);
+  return fallback;
+}
+
 function formatBytes(value: number): string {
   if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
   if (value >= 1024) return `${Math.round(value / 1024)} KB`;
@@ -220,6 +238,18 @@ export function App() {
     if (stored) return stored === "1";
     return window.matchMedia?.("(max-width: 760px)").matches === true;
   });
+  const [leftWidth, setLeftWidth] = useState(() => storedWidth(
+    LEFT_WIDTH_KEY,
+    LEFT_WIDTH_DEFAULT,
+    LEFT_WIDTH_MIN,
+    LEFT_WIDTH_MAX,
+  ));
+  const [rightWidth, setRightWidth] = useState(() => storedWidth(
+    RIGHT_WIDTH_KEY,
+    RIGHT_WIDTH_DEFAULT,
+    RIGHT_WIDTH_MIN,
+    RIGHT_WIDTH_MAX,
+  ));
   const [railPanel, setRailPanel] = useState<RailPanel | null>(null);
   const [busy, setBusy] = useState(false);
   const [dangerBusy, setDangerBusy] = useState(false);
@@ -1183,6 +1213,35 @@ export function App() {
     }
   }
 
+  function beginColumnResize(side: "left" | "right", event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = side === "left" ? leftWidth : rightWidth;
+    const min = side === "left" ? LEFT_WIDTH_MIN : RIGHT_WIDTH_MIN;
+    const max = side === "left" ? LEFT_WIDTH_MAX : RIGHT_WIDTH_MAX;
+    const key = side === "left" ? LEFT_WIDTH_KEY : RIGHT_WIDTH_KEY;
+    const setter = side === "left" ? setLeftWidth : setRightWidth;
+    document.body.classList.add("is-resizing-column");
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const directionalDelta = side === "left" ? delta : -delta;
+      const next = clampNumber(Math.round(startWidth + directionalDelta), min, max);
+      setter(next);
+      localStorage.setItem(key, String(next));
+    };
+    const handlePointerUp = () => {
+      document.body.classList.remove("is-resizing-column");
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
+  }
+
   async function respondPermission(id: string, decision: "allow_once" | "allow_session" | "deny") {
     try {
       await api.respondPermission(id, decision);
@@ -1463,29 +1522,39 @@ export function App() {
       .filter((event): event is Extract<SessionEvent, { type: "permission_response" }> => event.type === "permission_response")
       .map((event) => event.permissionRequestId),
   );
+  const shellStyle = {
+    "--left-width": `${leftWidth}px`,
+    "--right-width": `${rightWidth}px`,
+  } as CSSProperties;
 
   return (
-    <main className={`app-shell ${leftCollapsed ? "sidebar-collapsed" : ""} ${railPanel ? "rail-open" : ""}`}>
+    <main
+      className={`app-shell ${leftCollapsed ? "sidebar-collapsed" : ""} ${railPanel ? "rail-open" : ""}`}
+      style={shellStyle}
+    >
       <aside className={`sidebar ${leftCollapsed ? "collapsed" : ""}`}>
         <div className="brand-row">
           {!leftCollapsed ? <div className="brand">ForgeAgent</div> : <div className="brand-mark">F</div>}
-          <button
-            className="icon-button"
-            onClick={() => setLeftCollapsed((value) => !value)}
-            aria-label={leftCollapsed ? "Expand session sidebar" : "Collapse session sidebar"}
-            title={leftCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          >
-            {leftCollapsed ? "›" : "‹"}
-          </button>
+          <div className="brand-actions">
+            <button
+              className="new-session icon-button"
+              onClick={() => void createSession()}
+              disabled={busy || projectBusy || !selectedProject}
+              aria-label="New session"
+              title="New session"
+            >
+              +
+            </button>
+            <button
+              className="icon-button"
+              onClick={() => setLeftCollapsed((value) => !value)}
+              aria-label={leftCollapsed ? "Expand session sidebar" : "Collapse session sidebar"}
+              title={leftCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              {leftCollapsed ? "›" : "‹"}
+            </button>
+          </div>
         </div>
-        <button
-          className="new-session"
-          onClick={() => void createSession()}
-          disabled={busy || projectBusy || !selectedProject}
-          title="New session"
-        >
-          {leftCollapsed ? "+" : "+ New Session"}
-        </button>
         <button
           className={`sidebar-nav-button ${mainView === "extensions" ? "active" : ""}`}
           onClick={() => setMainView((view) => view === "extensions" ? "chat" : "extensions")}
@@ -1584,6 +1653,13 @@ export function App() {
           onClick={() => setLeftCollapsed(true)}
         />
       ) : null}
+      <button
+        type="button"
+        className="column-resize left-column-resize"
+        aria-label="Resize sessions column"
+        title="Resize sessions column"
+        onPointerDown={(event) => beginColumnResize("left", event)}
+      />
 
       <section className="reader">
         {mainView === "extensions" ? (
@@ -1778,28 +1854,48 @@ export function App() {
         )}
       </section>
 
-      <StatusRail
-        activePanel={railPanel}
-        setup={setup}
-        diagnostics={diagnostics}
-        usage={usage}
-        pendingPermissions={pendingPermissions}
-        deviceState={deviceState}
-        onSelect={(panel) => setRailPanel((current) => current === panel ? null : panel)}
+      <button
+        type="button"
+        className="column-resize right-column-resize"
+        aria-label="Resize inspector column"
+        title="Resize inspector column"
+        onPointerDown={(event) => beginColumnResize("right", event)}
       />
-      {railPanel ? (
-        <StatusDrawer
-          panel={railPanel}
+      <aside className="inspector" aria-label="Context inspector">
+        <StatusRail
+          activePanel={railPanel}
           setup={setup}
           diagnostics={diagnostics}
           usage={usage}
           pendingPermissions={pendingPermissions}
           deviceState={deviceState}
-          onSetNotificationsEnabled={setWebNotificationsEnabled}
-          onRefresh={reloadStatus}
-          onClose={() => setRailPanel(null)}
+          onSelect={(panel) => setRailPanel((current) => current === panel ? null : panel)}
         />
-      ) : null}
+        <div className="inspector-content">
+          {railPanel ? (
+            <StatusDrawer
+              panel={railPanel}
+              setup={setup}
+              diagnostics={diagnostics}
+              usage={usage}
+              pendingPermissions={pendingPermissions}
+              deviceState={deviceState}
+              onSetNotificationsEnabled={setWebNotificationsEnabled}
+              onRefresh={reloadStatus}
+              onClose={() => setRailPanel(null)}
+            />
+          ) : (
+            <InspectorOverview
+              setup={setup}
+              diagnostics={diagnostics}
+              usage={usage}
+              pendingPermissions={pendingPermissions}
+              deviceState={deviceState}
+              onSelect={setRailPanel}
+            />
+          )}
+        </div>
+      </aside>
     </main>
   );
 }
@@ -3000,6 +3096,92 @@ function SessionStateIndicator({ session }: { session: Pick<Session, "status" | 
   const indicator = sessionIndicator(session);
   if (indicator === "spinner") return <span className="session-spinner" aria-label="running" />;
   return <span className={`session-indicator ${indicator}`} aria-hidden="true" />;
+}
+
+function InspectorOverview(props: {
+  setup: SetupStatus | null;
+  diagnostics: Diagnostics | null;
+  usage: SessionUsageSummary | null;
+  pendingPermissions: PermissionRequest[];
+  deviceState: DeviceState | null;
+  onSelect: (panel: RailPanel) => void;
+}) {
+  const contextPercent = props.usage?.contextUsedPercent;
+  const tools = props.diagnostics?.mcp.tools ?? 0;
+  const notificationsEnabled = props.deviceState?.notificationSettings.enabled === true;
+  const items: Array<{
+    panel: RailPanel;
+    label: string;
+    value: string;
+    tone?: "ok" | "warn" | "neutral";
+  }> = [
+    {
+      panel: "context",
+      label: "Context",
+      value: contextPercent !== undefined ? `${contextPercent.toFixed(0)}% used` : "No usage yet",
+      tone: contextPercent !== undefined && contextPercent > 80 ? "warn" : "neutral",
+    },
+    {
+      panel: "permissions",
+      label: "Permissions",
+      value: props.pendingPermissions.length > 0 ? `${props.pendingPermissions.length} pending` : "Clear",
+      tone: props.pendingPermissions.length > 0 ? "warn" : "ok",
+    },
+    {
+      panel: "mcp",
+      label: "Tools",
+      value: `${tools} MCP tools`,
+      tone: props.diagnostics?.mcp.state === "connected" || props.diagnostics?.mcp.state === "idle" ? "ok" : "warn",
+    },
+    {
+      panel: "browser",
+      label: "Browser",
+      value: props.diagnostics?.webridge.state ?? "Unknown",
+      tone: props.diagnostics?.webridge.state === "online" ? "ok" : "warn",
+    },
+    {
+      panel: "provider",
+      label: "DeepSeek",
+      value: props.setup?.provider.configured ? props.setup.provider.model : "Not configured",
+      tone: props.setup?.provider.configured ? "ok" : "warn",
+    },
+    {
+      panel: "memory",
+      label: "Memory",
+      value: props.diagnostics?.memory.state ?? "Unknown",
+      tone: props.diagnostics?.memory.state === "degraded" ? "warn" : "ok",
+    },
+    {
+      panel: "notifications",
+      label: "Notifications",
+      value: notificationsEnabled ? "On" : "Off",
+      tone: notificationsEnabled ? "ok" : "neutral",
+    },
+  ];
+  return (
+    <section className="inspector-overview">
+      <div className="inspector-heading">
+        <span>Tools</span>
+        <strong>Context</strong>
+      </div>
+      <div className="inspector-menu">
+        {items.map((item) => (
+          <button
+            key={item.panel}
+            type="button"
+            className={`inspector-menu-item tone-${item.tone ?? "neutral"}`}
+            onClick={() => props.onSelect(item.panel)}
+          >
+            <span className="line-glyph" aria-hidden="true" />
+            <span>
+              <strong>{item.label}</strong>
+              <small>{item.value}</small>
+            </span>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function StatusRail(props: {
