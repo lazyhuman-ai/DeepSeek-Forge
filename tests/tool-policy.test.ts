@@ -101,6 +101,14 @@ describe("ToolPolicyManager", () => {
       "rg \"ToolPolicyManager\" src tests",
       "git status --short",
       "git diff -- src/permissions/tool-policy.ts",
+      "npm test",
+      "npm test -- --runInBand",
+      "npm run typecheck -- --pretty=false",
+      "npx --no-install tsc --noEmit --pretty=false",
+      "cargo check",
+      "go test ./...",
+      "python -m pytest",
+      "sed -n '1,20p' src/permissions/tool-policy.ts",
     ]) {
       const decision = policy.evaluate({
         sessionId: "s1",
@@ -121,9 +129,11 @@ describe("ToolPolicyManager", () => {
       "find . -name '*.ts' -delete",
       "ls src > files.txt",
       "cd /tmp && ls",
-      "npm test",
       "git checkout main",
       "ls $(pwd)",
+      "sed -i 's/a/b/' src/app.ts",
+      "sed -n '1,20p' /tmp/outside.txt",
+      "npm run deploy -- --prod",
     ]) {
       const decision = policy.evaluate({
         sessionId: "s1",
@@ -133,6 +143,24 @@ describe("ToolPolicyManager", () => {
       });
 
       expect(decision.decision, command).toBe("ask");
+    }
+  });
+
+  it("asks for overly complex compound shell commands instead of trying to auto-prove safety", () => {
+    const policy = new ToolPolicyManager();
+    const pathSandbox = new PathSandbox({ projectRoot: resolve(".") });
+    const manySegments = Array.from({ length: 55 }, () => "pwd").join(" && ");
+    const veryLongCommand = `echo ${"x".repeat(8_100)}`;
+
+    for (const command of [manySegments, veryLongCommand]) {
+      const decision = policy.evaluate({
+        sessionId: "s1",
+        tool: bashTool,
+        args: { command },
+        pathSandbox,
+      });
+
+      expect(decision.decision, command.slice(0, 120)).toBe("ask");
     }
   });
 

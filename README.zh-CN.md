@@ -278,7 +278,13 @@ npm run start
 npm run stop
 npm run forgeagent -- restart
 npm run check
+npm run native:build    # macOS App 打包/冒烟 + Android App 构建 + Android 连接单测
+npm run coding:e2e      # 真实 provider 下的编码 agent 发布场景
+npm run release:gate    # 完整发布门：check、native build、extensions e2e、release e2e
+npm run release:bundle  # 在 .forge-release/dist 生成本地 beta 发布产物
 ```
+
+发布准备请看 [docs/release-checklist.md](docs/release-checklist.md)。
 
 ## 常见问题
 

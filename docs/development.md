@@ -112,7 +112,18 @@ The public release gate is:
 npm run release:gate
 ```
 
-It runs the normal check pipeline and then `npm run release:e2e`, which exercises real product flows and writes reports under `.forge-release-e2e/`.
+It runs the normal check pipeline, macOS app packaging smoke checks, Android app builds plus Android connection unit tests, extension E2E, and release E2E:
+`npm run check`, `npm run native:build`, `npm run extensions:e2e`, and `npm run release:e2e`.
+The release E2E step exercises real product flows and writes reports under `.forge-release-e2e/`.
+
+After the gate passes, package local beta artifacts with:
+
+```sh
+npm run release:bundle
+```
+
+The artifacts and checksums are written under `.forge-release/dist/`.
+Use `docs/release-checklist.md` as the release operator checklist.
 
 Use isolated data directories for manual soak tests whenever possible so user runtime data is not polluted.
 

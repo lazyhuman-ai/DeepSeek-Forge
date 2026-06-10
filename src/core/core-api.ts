@@ -3,8 +3,11 @@ import { basename, extname, join, resolve } from "node:path";
 import type {
   BranchEvent,
   ContextUsageEvent,
+  Diagnostic,
+  DiffEvent,
   PermissionRequestEvent,
   PermissionResponseEvent,
+  PermissionGrantKind,
   RuntimeEvent,
   McpElicitationRequestEvent,
   McpElicitationResponseEvent,
@@ -103,6 +106,13 @@ import type {
 } from "../extensions/types.js";
 import { setExtensionManagerForTools } from "../tools/built-in/extension-shared.js";
 import { TerminalManager } from "../runtimes/terminal/terminal-manager.js";
+import {
+  buildWorkspaceActivityState,
+  buildWorkspaceActivitySummary,
+  WorkspaceActivityManager,
+  type WorkspaceActivityState,
+} from "../workspace/activity-manager.js";
+import type { VerificationEvent, ShellTaskEvent } from "../streams/event-types.js";
 import type {
   CreateTerminalSessionInput,
   TerminalOutputEvent,
@@ -228,6 +238,7 @@ export type ToolPolicyOptions = {
 
 export type StartupRehydrateReport = {
   repairedToolResults: number;
+  repairedShellTasks: number;
   requeuedSessions: string[];
   startupBlockedSessions: string[];
   dispatchResults: Record<string, DispatchTurnResult>;
@@ -354,6 +365,7 @@ export class CoreAPI {
   #extensionManager?: ExtensionManager;
   #extensionRegistryStore?: ExtensionRegistryStore;
   #terminalManager?: TerminalManager;
+  #workspaceActivityManager?: WorkspaceActivityManager;
 
   constructor(toolRegistry?: ToolRegistry, options?: {
     dataDir?: string;
@@ -825,6 +837,110 @@ export class CoreAPI {
     return this.#permissionBroker.respondToPermissionRequest(requestId, response);
   }
 
+  initWorkspaceActivityManager(): WorkspaceActivityManager {
+    if (!this.#workspaceActivityManager) {
+      this.#workspaceActivityManager = new WorkspaceActivityManager({
+        nextSeq: () => nextSeq++,
+        now: () => now(),
+        appendSessionEvent: (sid, event) => this.#appendWorkspaceActivityEvent(sid, event),
+      });
+    }
+    return this.#workspaceActivityManager;
+  }
+
+  getWorkspaceActivity(sessionId: string, branchId?: string): WorkspaceActivityState {
+    const events = branchId ? this.getVisibleThread(sessionId, branchId) : this.#threadStore.getThread(sessionId);
+    return buildWorkspaceActivityState(sessionId, events, branchId);
+  }
+
+  getSessionDiffs(sessionId: string, afterSeq = 0, branchId?: string): DiffEvent[] {
+    const events = branchId ? this.getVisibleThread(sessionId, branchId) : this.#threadStore.getThread(sessionId);
+    return events.filter((event): event is DiffEvent => (
+      event.type === "diff_event" &&
+      event.sessionId === sessionId &&
+      event.seq > afterSeq &&
+      (branchId === undefined || event.branchId === undefined || event.branchId === branchId)
+    ));
+  }
+
+  getDiagnostics(sessionId: string, filter?: { source?: string; branchId?: string }): Diagnostic[] {
+    const events = filter?.branchId
+      ? this.getVisibleThread(sessionId, filter.branchId)
+      : this.#threadStore.getThread(sessionId);
+    const latest = [...events].reverse().find((event) => (
+      event.type === "diagnostic_event" &&
+      event.sessionId === sessionId &&
+      (filter?.source === undefined || event.source === filter.source)
+    ));
+    return latest?.type === "diagnostic_event" ? latest.diagnostics : [];
+  }
+
+  getVerificationResults(sessionId: string, afterSeq = 0, branchId?: string): VerificationEvent[] {
+    const events = branchId ? this.getVisibleThread(sessionId, branchId) : this.#threadStore.getThread(sessionId);
+    return events.filter((event): event is VerificationEvent => (
+      event.type === "verification_event" &&
+      event.sessionId === sessionId &&
+      event.seq > afterSeq &&
+      (branchId === undefined || event.branchId === undefined || event.branchId === branchId)
+    ));
+  }
+
+  listShellTasks(sessionId: string, branchId?: string): ShellTaskEvent[] {
+    const events = branchId ? this.getVisibleThread(sessionId, branchId) : this.#threadStore.getThread(sessionId);
+    return events.filter((event): event is ShellTaskEvent => (
+      event.type === "shell_task_event" &&
+      event.sessionId === sessionId &&
+      (branchId === undefined || event.branchId === undefined || event.branchId === branchId)
+    ));
+  }
+
+  createPermissionGrant(sessionId: string, input: {
+    grantKind: PermissionGrantKind;
+    scope?: "session" | "project" | "branch";
+    branchId?: string;
+    expiresAt?: string;
+  }): ReturnType<PermissionBroker["createPermissionGrant"]> {
+    if (!this.#permissionBroker) throw new Error("Tool policy is not initialized.");
+    const session = this.#sessions.get(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+    const branchId = input.branchId ?? this.#resolveBranchId(session);
+    const grant = this.#permissionBroker.createPermissionGrant({
+      sessionId,
+      grantKind: input.grantKind,
+      scope: input.scope ?? "session",
+      ...(input.scope === "branch" ? { branchId } : {}),
+      ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+    });
+    this.initWorkspaceActivityManager().recordPermissionGrant({
+      sessionId,
+      branchId,
+      grantId: grant.grantId,
+      grantKind: grant.grantKind,
+      action: "created",
+      scope: grant.scope,
+      message: `Permission grant created: ${grant.grantKind} (${grant.scope})`,
+      ...(grant.expiresAt !== undefined ? { expiresAt: grant.expiresAt } : {}),
+    });
+    return grant;
+  }
+
+  revokePermissionGrant(grantId: string): ReturnType<PermissionBroker["revokePermissionGrant"]> {
+    if (!this.#permissionBroker) throw new Error("Tool policy is not initialized.");
+    const grant = this.#permissionBroker.revokePermissionGrant(grantId);
+    if (grant) {
+      this.initWorkspaceActivityManager().recordPermissionGrant({
+        sessionId: grant.sessionId,
+        ...(grant.branchId !== undefined ? { branchId: grant.branchId } : {}),
+        grantId: grant.grantId,
+        grantKind: grant.grantKind,
+        action: "revoked",
+        scope: grant.scope,
+        message: `Permission grant revoked: ${grant.grantKind} (${grant.scope})`,
+      });
+    }
+    return grant;
+  }
+
   initRuntimeManager(): RuntimeManager {
     this.#runtimeManager = new RuntimeManager(
       this.#threadStore,
@@ -1294,7 +1410,8 @@ export class CoreAPI {
   async #runTurnInternal(sessionId: string): Promise<Session> {
     const session = this.#sessions.get(sessionId);
     if (!session) throw new Error(`Session not found: ${sessionId}`);
-    const projectRoot = this.#sessionProjectRoot(session);
+    const activeBranchId = this.#resolveBranchId(session);
+    const projectRoot = this.#effectiveSessionProjectRoot(session, activeBranchId);
     if (!this.#modelProvider && !this.#toolExecutor) {
       this.#blockNotRunnableSession(sessionId);
       throw new Error("ModelProvider and ToolExecutor are not set");
@@ -1316,8 +1433,6 @@ export class CoreAPI {
     }
     const controller = new AbortController();
     this.#turnControllers.set(sessionId, controller);
-    const activeBranchId = this.#resolveBranchId(session);
-
     logger.info("Turn starting", { sessionId });
 
     const before = this.#threadStore.getThread(sessionId).length;
@@ -1332,6 +1447,12 @@ export class CoreAPI {
     if (this.#skillCatalog) promptOptions.skillCatalog = this.#skillCatalog;
     if (this.#skillCatalog) promptOptions.skillContext = this.#buildSkillRenderContext(sessionId, activeBranchId);
     if (this.#memoryStore) promptOptions.memoryStore = this.#memoryStore;
+    const activitySummary = buildWorkspaceActivitySummary(
+      sessionId,
+      this.getVisibleThread(sessionId, activeBranchId),
+      activeBranchId,
+    );
+    if (activitySummary.trim()) promptOptions.workspaceActivitySummary = activitySummary;
     const systemPrompt = buildSystemPrompt(promptOptions);
 
     const tools = this.#toolRegistry?.list() ?? [];
@@ -1360,17 +1481,22 @@ export class CoreAPI {
     if (Object.keys(session.branches ?? {}).length > 1 || activeBranchId !== MAIN_BRANCH_ID) {
       loopOptions.readThread = (sid) => this.getVisibleThread(sid, activeBranchId);
     }
-    if (this.#permissionBroker) {
-      const toolExecutionContext: NonNullable<typeof loopOptions.toolExecutionContext> = {
-        permissionBroker: this.#permissionBroker,
-        pathSandbox: this.#createPathSandbox(sessionId),
-        projectRoot,
-        bashSandboxMode: "enforce",
-        branchId: activeBranchId,
-      };
-      if (source) toolExecutionContext.source = source;
-      loopOptions.toolExecutionContext = toolExecutionContext;
-    }
+    const trackedProvider = this.#usageTrackingProvider(sessionId, this.#modelProvider);
+    const toolExecutionContext: NonNullable<typeof loopOptions.toolExecutionContext> = {
+      toolExecutor: this.#toolExecutor,
+      toolsProvider: () => this.#toolRegistry?.list() ?? [],
+      workspaceActivity: this.initWorkspaceActivityManager(),
+      modelProvider: trackedProvider,
+      pathSandbox: this.#createPathSandbox(sessionId, projectRoot),
+      projectRoot,
+      readFileStateScope: `${session.projectId ?? "default"}:${sessionId}:${activeBranchId}`,
+      readThread: (sid) => this.getVisibleThread(sid, activeBranchId),
+      bashSandboxMode: "enforce",
+      branchId: activeBranchId,
+    };
+    if (this.#permissionBroker) toolExecutionContext.permissionBroker = this.#permissionBroker;
+    if (source) toolExecutionContext.source = source;
+    loopOptions.toolExecutionContext = toolExecutionContext;
     if (this.#artifactMaxResultSizeChars !== undefined) {
       loopOptions.artifactMaxResultSizeChars = this.#artifactMaxResultSizeChars;
     }
@@ -1398,7 +1524,6 @@ export class CoreAPI {
       loopOptions.requireUsageForCompaction = true;
     }
 
-    const trackedProvider = this.#usageTrackingProvider(sessionId, this.#modelProvider);
     const loop = new AgentLoop(
       trackedProvider,
       this.#toolExecutor,
@@ -1729,7 +1854,9 @@ export class CoreAPI {
   previewHtmlFile(filePath: string, options?: { sessionId?: string }): HtmlFilePreview {
     const session = options?.sessionId ? this.#sessions.get(options.sessionId) : undefined;
     if (options?.sessionId && !session) throw new Error(`Session not found: ${options.sessionId}`);
-    const projectRoot = session ? this.#sessionProjectRoot(session) : this.#projectStore.getCurrentProject().path;
+    const projectRoot = session
+      ? this.#effectiveSessionProjectRoot(session, this.#resolveBranchId(session))
+      : this.#projectStore.getCurrentProject().path;
     const scratchRoot = session ? join(this.#dataDir, "workspaces", `session_${session.id}`) : undefined;
     const resolved = new PathSandbox({
       projectRoot,
@@ -1869,6 +1996,7 @@ export class CoreAPI {
     );
     const report: StartupRehydrateReport = {
       repairedToolResults: 0,
+      repairedShellTasks: 0,
       requeuedSessions: [],
       startupBlockedSessions: [],
       dispatchResults: {},
@@ -1903,6 +2031,10 @@ export class CoreAPI {
       await this.#skillEvolutionManager.rehydrateAfterStartup();
     } else {
       this.#skillStore?.rebuildIndex();
+    }
+
+    for (const session of this.#sessions.values()) {
+      report.repairedShellTasks += this.#appendProcessRestartShellTaskEvents(session.id);
     }
 
     for (const session of this.#sessions.values()) {
@@ -1959,9 +2091,9 @@ export class CoreAPI {
     return result;
   }
 
-  #createPathSandbox(sessionId: string): PathSandbox {
+  #createPathSandbox(sessionId: string, projectRootOverride?: string): PathSandbox {
     const session = this.#sessions.get(sessionId);
-    const projectRoot = session ? this.#sessionProjectRoot(session) : this.#projectStore.getCurrentProject().path;
+    const projectRoot = projectRootOverride ?? (session ? this.#sessionProjectRoot(session) : this.#projectStore.getCurrentProject().path);
     const readRoots: string[] = [];
     if (this.#skillStore) readRoots.push(this.#skillStore.rootDir);
     return new PathSandbox({
@@ -2091,6 +2223,7 @@ export class CoreAPI {
       message: `Read skill resource ${filePath} from ${skill.name} ${skill.version}.`,
     };
     this.#threadStore.append(event.sessionId, skillEvent);
+    this.#notificationHub.emitSessionEvent(event.sessionId, skillEvent);
   }
 
   #blockNotRunnableSession(sessionId: string): void {
@@ -2146,6 +2279,34 @@ export class CoreAPI {
 
   #appendProcessRestartToolResults(sessionId: string): number {
     return this.#appendMissingToolResults(sessionId, 0, PROCESS_RESTART_TOOL_RESULT);
+  }
+
+  #appendProcessRestartShellTaskEvents(sessionId: string): number {
+    const latestByTask = new Map<string, ShellTaskEvent>();
+    for (const event of this.#threadStore.getThread(sessionId)) {
+      if (event.type === "shell_task_event") latestByTask.set(event.taskId, event);
+    }
+
+    let appended = 0;
+    for (const task of latestByTask.values()) {
+      if (task.status !== "running") continue;
+      const event: ShellTaskEvent = {
+        type: "shell_task_event",
+        seq: nextSeq++,
+        timestamp: now(),
+        sessionId,
+        ...(task.branchId !== undefined ? { branchId: task.branchId } : {}),
+        taskId: task.taskId,
+        action: "failed",
+        command: task.command,
+        status: "failed",
+        message: "Process restarted before this background task completed.",
+        ...(task.outputPreview !== undefined ? { outputPreview: task.outputPreview } : {}),
+      };
+      this.#appendWorkspaceActivityEvent(sessionId, event);
+      appended++;
+    }
+    return appended;
   }
 
   #appendMissingToolResults(
@@ -2343,6 +2504,24 @@ export class CoreAPI {
     return this.#ensureSessionProject(session).path;
   }
 
+  #effectiveSessionProjectRoot(session: Session, branchId: string): string {
+    const base = this.#sessionProjectRoot(session);
+    const state = buildWorkspaceActivityState(
+      session.id,
+      this.getVisibleThread(session.id, branchId),
+      branchId,
+    );
+    const worktree = state.worktree;
+    if (
+      worktree?.path &&
+      (worktree.action === "entered" || worktree.action === "kept") &&
+      existsSync(worktree.path)
+    ) {
+      return resolve(worktree.path);
+    }
+    return base;
+  }
+
   #prepareProjectScopedStores(projectRoot: string): void {
     const resolved = resolve(projectRoot);
     if (this.#policyProjectRoot === resolved) return;
@@ -2473,6 +2652,23 @@ export class CoreAPI {
       this.#turnEventCursors.set(sessionId, this.#threadStore.getThread(sessionId).length);
 	    }
 	  }
+
+  #appendWorkspaceActivityEvent(sessionId: string, event: SessionEvent): void {
+    if (!this.#sessions.has(sessionId)) return;
+    if (this.#turnEventCursors.has(sessionId)) {
+      this.#emitNewTurnEvents(sessionId);
+    }
+    this.#threadStore.append(sessionId, event);
+    this.#notificationHub.emitSessionEvent(sessionId, event);
+    if (this.#turnEventCursors.has(sessionId)) {
+      this.#turnEventCursors.set(sessionId, this.#threadStore.getThread(sessionId).length);
+    }
+    this.#appendSystemEvent(
+      "workspace_activity",
+      event.type,
+      `${sessionId}: ${"message" in event && typeof event.message === "string" ? event.message : event.type}`,
+    );
+  }
 
   #appendMcpSessionEvent(
     sessionId: string,

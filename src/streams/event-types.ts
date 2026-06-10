@@ -209,6 +209,152 @@ export type PermissionResponseEvent = EventBase & {
   deviceName?: string;
 };
 
+export type ActivityKind =
+  | "plan"
+  | "change"
+  | "diagnostic"
+  | "verification"
+  | "shell_task"
+  | "worktree"
+  | "artifact"
+  | "browser"
+  | "mcp"
+  | "permission"
+  | "failure";
+
+export type ActivityStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "blocked"
+  | "cancelled"
+  | "info";
+
+export type ActivityEvent = EventBase & {
+  type: "activity_event";
+  activityKind: ActivityKind;
+  status: ActivityStatus;
+  title: string;
+  message: string;
+  payload?: Record<string, unknown>;
+};
+
+export type TodoItem = {
+  id: string;
+  content: string;
+  status: "pending" | "in_progress" | "completed" | "cancelled";
+};
+
+export type TodoEvent = EventBase & {
+  type: "todo_event";
+  items: TodoItem[];
+  message: string;
+};
+
+export type StructuredDiffHunk = {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+};
+
+export type StructuredDiff = {
+  filePath: string;
+  operation: "created" | "updated" | "deleted";
+  additions: number;
+  deletions: number;
+  hunks: StructuredDiffHunk[];
+};
+
+export type EditCheckpoint = {
+  kind: "file_snapshot";
+  beforeExists: boolean;
+  afterHash: string;
+  previousContent?: string;
+  previousEncoding?: "utf8" | "utf16le";
+  previousHadBom?: boolean;
+  previousLineEnding?: "\n" | "\r\n";
+  snapshotSkipped?: boolean;
+  skipReason?: string;
+};
+
+export type DiffEvent = EventBase & {
+  type: "diff_event";
+  filePath: string;
+  operation: "created" | "updated" | "deleted";
+  additions: number;
+  deletions: number;
+  summary: string;
+  diff?: StructuredDiff;
+  checkpoint?: EditCheckpoint;
+};
+
+export type Diagnostic = {
+  filePath?: string;
+  line?: number;
+  character?: number;
+  severity: "error" | "warning" | "info";
+  message: string;
+  source?: string;
+  code?: string;
+};
+
+export type DiagnosticEvent = EventBase & {
+  type: "diagnostic_event";
+  source: string;
+  status: "clean" | "issues" | "failed";
+  diagnostics: Diagnostic[];
+  message: string;
+};
+
+export type VerificationEvent = EventBase & {
+  type: "verification_event";
+  command: string;
+  status: "running" | "passed" | "failed";
+  exitCode?: number;
+  summary: string;
+  artifactId?: string;
+};
+
+export type ShellTaskEvent = EventBase & {
+  type: "shell_task_event";
+  taskId: string;
+  action: "started" | "output" | "completed" | "failed" | "killed";
+  command: string;
+  status: "running" | "completed" | "failed" | "killed";
+  message: string;
+  outputPreview?: string;
+  exitCode?: number;
+};
+
+export type WorktreeEvent = EventBase & {
+  type: "worktree_event";
+  action: "entered" | "exited" | "kept" | "removed" | "failed";
+  path?: string;
+  branch?: string;
+  message: string;
+};
+
+export type PermissionGrantKind =
+  | "workspace_edits"
+  | "safe_commands"
+  | "package_install"
+  | "external_runtime"
+  | "network_write"
+  | "destructive_action";
+
+export type PermissionGrantEvent = EventBase & {
+  type: "permission_grant_event";
+  grantId: string;
+  grantKind: PermissionGrantKind;
+  action: "created" | "revoked" | "expired";
+  scope: "session" | "project" | "branch";
+  message: string;
+  expiresAt?: string;
+};
+
 export type ArtifactPointer = EventBase & {
   type: "artifact_pointer";
   artifactId: string;
@@ -305,6 +451,14 @@ export type SessionEvent =
   | BranchEvent
   | PermissionRequestEvent
   | PermissionResponseEvent
+  | ActivityEvent
+  | TodoEvent
+  | DiffEvent
+  | DiagnosticEvent
+  | VerificationEvent
+  | ShellTaskEvent
+  | WorktreeEvent
+  | PermissionGrantEvent
   | McpElicitationRequestEvent
   | McpElicitationResponseEvent
   | ArtifactPointer
@@ -322,7 +476,8 @@ export type SystemEventCategory =
   | "core_lifecycle"
   | "agent_lifecycle"
   | "skill_lifecycle"
-  | "mcp_lifecycle";
+  | "mcp_lifecycle"
+  | "workspace_activity";
 
 export type SystemEvent = {
   seq: number;

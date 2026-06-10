@@ -3,8 +3,23 @@ import { readFileTool } from "./read-file.js";
 import { writeFileTool } from "./write-file.js";
 import { editFileTool } from "./edit-file.js";
 import { bashTool } from "./bash-tool.js";
+import { enterPlanModeTool, exitPlanModeTool } from "./plan-mode.js";
+import { todoWriteTool } from "./todo-write.js";
+import { multiEditFileTool } from "./multi-edit-file.js";
+import { applyPatchFileTool } from "./apply-patch-file.js";
+import { revertFileChangeTool } from "./edit-checkpoint.js";
+import { lspDiagnosticsTool } from "./lsp-diagnostics.js";
+import { lspQueryTool } from "./lsp-query.js";
+import { taskOutputTool } from "./task-output.js";
+import { taskKillTool } from "./task-kill.js";
+import { enterWorktreeTool, exitWorktreeTool } from "./worktree-tools.js";
+import { gitDiffTool } from "./git-diff.js";
+import { workspaceReviewTool } from "./workspace-review.js";
+import { agentTaskTool } from "./agent-task.js";
+import { verifyWorkspaceTool } from "./verify-workspace.js";
 import { globTool } from "./glob.js";
 import { grepTool } from "./grep.js";
+import { fileSearchTool } from "./file-search.js";
 import { webFetchTool } from "./web-fetch.js";
 import { webSearchTool } from "./web-search.js";
 import { memoryAddTool } from "./memory-add.js";
@@ -26,7 +41,24 @@ export const builtInTools = [
   readFileTool,
   writeFileTool,
   editFileTool,
+  enterPlanModeTool,
+  exitPlanModeTool,
+  multiEditFileTool,
+  applyPatchFileTool,
+  revertFileChangeTool,
+  todoWriteTool,
+  lspDiagnosticsTool,
+  lspQueryTool,
   bashTool,
+  taskOutputTool,
+  taskKillTool,
+  enterWorktreeTool,
+  exitWorktreeTool,
+  gitDiffTool,
+  verifyWorkspaceTool,
+  workspaceReviewTool,
+  agentTaskTool,
+  fileSearchTool,
   globTool,
   grepTool,
   webFetchTool,

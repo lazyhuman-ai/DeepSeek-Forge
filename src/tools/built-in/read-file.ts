@@ -1,23 +1,34 @@
-import { readFileSync, statSync, existsSync, readdirSync } from "node:fs";
+import { statSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExecutableToolDefinition } from "../schemas.js";
 import { buildTool } from "../schemas.js";
-import { readFileState } from "../read-file-state.js";
+import { readFileStateForContext } from "../read-file-state.js";
 import { resolveToolPath, type ToolPathContext } from "./path-helper.js";
+import { readTextFile } from "../text-file-io.js";
 
 const MAX_LINES = 2000;
 const MAX_SIZE_BYTES = 256 * 1024;
+const MAX_NOTEBOOK_SUMMARY_BYTES = 2 * 1024 * 1024;
 
 const BINARY_EXTENSIONS = new Set([
   ".exe", ".dll", ".so", ".dylib", ".bin", ".dat", ".class",
   ".o", ".obj", ".wasm", ".pyc", ".pyo", ".gz", ".tar", ".zip",
   ".7z", ".rar", ".bz2", ".xz", ".zst", ".br", ".lz4",
-  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".svg",
   ".mp3", ".mp4", ".avi", ".mov", ".mkv", ".wav", ".flac",
-  ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+  ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
   ".ttf", ".otf", ".woff", ".woff2",
   ".db", ".sqlite", ".sqlite3",
-  ".ipynb",
+]);
+
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"]);
+
+const DANGEROUS_DEVICE_PATHS = new Set([
+  "/dev/random",
+  "/dev/urandom",
+  "/dev/zero",
+  "/dev/tty",
+  "/dev/console",
+  "/proc/kcore",
 ]);
 
 const CYBER_REMINDER = `\n<system-reminder>\nWhenever you read a file, you should consider whether it looks like malware or is malicious in some way. If so, you should stop and inform the user.\n</system-reminder>`;
@@ -37,6 +48,143 @@ function addLineNumbers(content: string, startLine: number): string {
 function isBinaryByExtension(filePath: string): boolean {
   const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
   return BINARY_EXTENSIONS.has(ext);
+}
+
+function fileExtension(filePath: string): string {
+  const index = filePath.lastIndexOf(".");
+  return index >= 0 ? filePath.slice(index).toLowerCase() : "";
+}
+
+function toolError(output: string): { output: string; isError: true } {
+  return { output, isError: true };
+}
+
+function readUInt16LE(buffer: Buffer, offset: number): number | undefined {
+  return buffer.length >= offset + 2 ? buffer.readUInt16LE(offset) : undefined;
+}
+
+function readUInt32BE(buffer: Buffer, offset: number): number | undefined {
+  return buffer.length >= offset + 4 ? buffer.readUInt32BE(offset) : undefined;
+}
+
+function imageDimensions(filePath: string): { width?: number; height?: number; format: string } {
+  const buffer = readFileSync(filePath, { flag: "r" }).subarray(0, 512);
+  const ext = fileExtension(filePath);
+  if (buffer.length >= 24 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    const dims: { width?: number; height?: number; format: string } = { format: "PNG" };
+    const width = readUInt32BE(buffer, 16);
+    const height = readUInt32BE(buffer, 20);
+    if (width !== undefined) dims.width = width;
+    if (height !== undefined) dims.height = height;
+    return dims;
+  }
+  const gifHeader = buffer.subarray(0, 6).toString("ascii");
+  if (buffer.length >= 10 && (gifHeader === "GIF87a" || gifHeader === "GIF89a")) {
+    const dims: { width?: number; height?: number; format: string } = { format: "GIF" };
+    const width = readUInt16LE(buffer, 6);
+    const height = readUInt16LE(buffer, 8);
+    if (width !== undefined) dims.width = width;
+    if (height !== undefined) dims.height = height;
+    return dims;
+  }
+  if (buffer.length >= 12 && buffer.subarray(0, 4).toString("ascii") === "RIFF" && buffer.subarray(8, 12).toString("ascii") === "WEBP") {
+    return { format: "WebP" };
+  }
+  if (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 9 < buffer.length) {
+      if (buffer[offset] !== 0xff) break;
+      const marker = buffer[offset + 1];
+      const size = buffer.readUInt16BE(offset + 2);
+      if (marker !== undefined && marker >= 0xc0 && marker <= 0xc3 && offset + 8 < buffer.length) {
+        return {
+          format: "JPEG",
+          height: buffer.readUInt16BE(offset + 5),
+          width: buffer.readUInt16BE(offset + 7),
+        };
+      }
+      if (!Number.isFinite(size) || size < 2) break;
+      offset += 2 + size;
+    }
+    return { format: "JPEG" };
+  }
+  return { format: ext ? ext.slice(1).toUpperCase() : "image" };
+}
+
+function describeImage(filePath: string, sizeBytes: number): string {
+  try {
+    const dims = imageDimensions(filePath);
+    const size = dims.width && dims.height ? `${dims.width}x${dims.height}` : "dimensions unavailable";
+    return [
+      `[Image file: ${filePath}]`,
+      `Format: ${dims.format}`,
+      `Size: ${sizeBytes} bytes`,
+      `Dimensions: ${size}`,
+      "This is not text, so read_file returns metadata instead of binary bytes.",
+      "Recovery: inspect the image in the Web Console preview/browser, or ask the user what visual detail matters if model vision is required.",
+    ].join("\n");
+  } catch (error) {
+    return [
+      `[Image file: ${filePath}]`,
+      `Size: ${sizeBytes} bytes`,
+      "This is not text, so read_file returns metadata instead of binary bytes.",
+      `Image metadata error: ${error instanceof Error ? error.message : String(error)}`,
+    ].join("\n");
+  }
+}
+
+function describePdf(filePath: string, sizeBytes: number): string {
+  const buffer = readFileSync(filePath, { flag: "r" });
+  const head = buffer.subarray(0, Math.min(buffer.length, 2 * 1024 * 1024)).toString("latin1");
+  const version = head.match(/%PDF-([0-9.]+)/)?.[1] ?? "unknown";
+  const pageCount = new Set([...head.matchAll(/(\d+)\s+\d+\s+obj\s*<<[^>]*\/Type\s*\/Page\b/g)].map((match) => match[1])).size
+    || [...head.matchAll(/\/Type\s*\/Page\b/g)].length;
+  return [
+    `[PDF file: ${filePath}]`,
+    `PDF version: ${version}`,
+    `Size: ${sizeBytes} bytes`,
+    `Approximate pages: ${pageCount || "unknown"}`,
+    "This is not plain text, so read_file returns document metadata instead of raw PDF bytes.",
+    "Recovery: use a PDF/document extraction tool or open the file in the Web Console preview when page text or visual layout is needed.",
+  ].join("\n");
+}
+
+function summarizeNotebook(filePath: string, sizeBytes: number): string | { output: string; isError: true } {
+  if (sizeBytes > MAX_NOTEBOOK_SUMMARY_BYTES) {
+    return toolError([
+      "Notebook is too large for read_file notebook summary.",
+      `Path: ${filePath}`,
+      `Size: ${sizeBytes} bytes`,
+      `Limit: ${MAX_NOTEBOOK_SUMMARY_BYTES} bytes`,
+      "Recovery: use a notebook-specific tool, grep for specific symbols, or ask the user which cells matter.",
+    ].join("\n"));
+  }
+  try {
+    const raw = readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as { cells?: Array<{ cell_type?: string; source?: string | string[] }> };
+    const cells = Array.isArray(parsed.cells) ? parsed.cells : [];
+    const preview = cells.slice(0, 20).map((cell, index) => {
+      const source = Array.isArray(cell.source) ? cell.source.join("") : (cell.source ?? "");
+      const oneLine = source.replace(/\s+/g, " ").trim();
+      return `- cell ${index + 1} ${cell.cell_type ?? "unknown"}: ${oneLine.slice(0, 180)}${oneLine.length > 180 ? "..." : ""}`;
+    });
+    return [
+      `[Jupyter notebook: ${filePath}]`,
+      `Size: ${sizeBytes} bytes`,
+      `Cells: ${cells.length}`,
+      preview.length > 0 ? "Cell preview:" : "No cells found.",
+      ...preview,
+      cells.length > preview.length ? `... ${cells.length - preview.length} more cell(s) omitted.` : "",
+      "Recovery: use a notebook-specific editor for structural edits; read_file summarizes notebooks to avoid unsafe raw JSON editing.",
+    ].filter(Boolean).join("\n");
+  } catch (error) {
+    return toolError([
+      "Failed to parse Jupyter notebook JSON.",
+      `Path: ${filePath}`,
+      `Reason: ${error instanceof Error ? error.message : String(error)}`,
+      "Recovery: inspect the file as text only if you are sure it is valid JSON, or use a notebook-specific tool.",
+    ].join("\n"));
+  }
 }
 
 function suggestSimilar(
@@ -95,22 +243,48 @@ async function handler(
   });
   if (!resolvedPath.ok) return resolvedPath;
   const filePath = resolvedPath.path;
+  const readFileState = readFileStateForContext(context);
   const offset = (args.offset as number) ?? 1;
   const limit = args.limit as number | undefined;
 
+  if (DANGEROUS_DEVICE_PATHS.has(filePath)) {
+    return {
+      output: [
+        "Tool sandbox blocked special device file read.",
+        "Tool: read_file",
+        "Requested action: fs.read",
+        `Requested path: ${filePath}`,
+        "Reason: This path is a special device or kernel pseudo-file that can block forever, stream unbounded bytes, or expose unsafe system memory.",
+        "Recovery: Read a normal project file, or ask the user for the specific data you need.",
+      ].join("\n"),
+      isError: true,
+    };
+  }
+
   if (!existsSync(filePath)) {
     const suggestion = suggestSimilar(filePath);
-    return `File does not exist: ${filePath}.${suggestion}`;
+    return toolError(`File does not exist: ${filePath}.${suggestion}\nRecovery: check the path with glob, or read the suggested file if it is correct.`);
   }
 
   const stat = statSync(filePath);
 
   if (stat.isDirectory()) {
-    return `Cannot read '${filePath}': it is a directory. Use a tool like glob or ls to list directory contents.`;
+    return toolError(`Cannot read '${filePath}': it is a directory.\nRecovery: use glob to list files, or read a specific file inside this directory.`);
+  }
+
+  const ext = fileExtension(filePath);
+  if (IMAGE_EXTENSIONS.has(ext)) {
+    return describeImage(filePath, stat.size);
+  }
+  if (ext === ".pdf") {
+    return describePdf(filePath, stat.size);
+  }
+  if (ext === ".ipynb") {
+    return summarizeNotebook(filePath, stat.size);
   }
 
   if (stat.size > MAX_SIZE_BYTES) {
-    return `File content (${stat.size} bytes) exceeds maximum allowed size (${MAX_SIZE_BYTES} bytes). Use offset and limit parameters to read specific portions, or use grep to search within the file.`;
+    return toolError(`File content (${stat.size} bytes) exceeds maximum allowed size (${MAX_SIZE_BYTES} bytes).\nRecovery: use grep to search within the file, split the file, or use a domain-specific reader for this file type.`);
   }
 
   if (stat.size === 0) {
@@ -128,11 +302,11 @@ async function handler(
   }
 
   if (isBinaryByExtension(filePath)) {
-    const ext = filePath.slice(filePath.lastIndexOf("."));
-    return `This tool cannot read binary files. The file appears to be a binary ${ext} file.`;
+    return toolError(`This tool cannot read binary files. The file appears to be a binary ${ext || "unknown"} file.\nRecovery: use a domain-specific reader, artifact preview, or ask the user which content from this file is needed.`);
   }
 
-  const content = readFileSync(filePath, "utf-8");
+  const textFile = readTextFile(filePath);
+  const content = textFile.content;
   const lines = content.split(/\r?\n/);
 
   // Check dedup: same file, same mtime, same offset/limit
@@ -155,6 +329,9 @@ async function handler(
     const nextState: Parameters<typeof readFileState.set>[1] = {
       content,
       mtimeMs,
+      encoding: textFile.encoding,
+      hadBom: textFile.hadBom,
+      lineEnding: textFile.lineEnding,
       offset: startLine,
       isPartialView,
     };
@@ -172,6 +349,9 @@ async function handler(
   const nextState: Parameters<typeof readFileState.set>[1] = {
     content,
     mtimeMs,
+    encoding: textFile.encoding,
+    hadBom: textFile.hadBom,
+    lineEnding: textFile.lineEnding,
     offset,
     isPartialView,
   };

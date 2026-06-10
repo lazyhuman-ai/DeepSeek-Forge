@@ -15,6 +15,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete process.env.CLAUDE_CODE_EXECPATH;
   // cleanup handled by beforeEach
 });
 
@@ -54,5 +55,43 @@ describe("glob", () => {
     );
     const parsed = JSON.parse(result as string);
     expect(parsed.filenames.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("defaults to the session project root when path is omitted", async () => {
+    writeFileSync(tmpPath("project-only.ts"), "x");
+
+    const result = await globTool.handler(
+      { pattern: "*.ts" },
+      "s1",
+      { projectRoot: tmpDir },
+    );
+
+    const parsed = JSON.parse(result as string);
+    expect(parsed.filenames).toContain("project-only.ts");
+  });
+
+  it("passes glob patterns as argv instead of shell fragments", async () => {
+    writeFileSync(tmpPath("semi;colon.ts"), "x");
+
+    const result = await globTool.handler(
+      { pattern: "semi;*.ts", path: tmpDir },
+      "s1",
+    );
+
+    const parsed = JSON.parse(result as string);
+    expect(parsed.filenames).toContain("semi;colon.ts");
+  });
+
+  it("does not treat the Claude executable path as ripgrep", async () => {
+    process.env.CLAUDE_CODE_EXECPATH = "/bin/false";
+    writeFileSync(tmpPath("forge-index.ts"), "x");
+
+    const result = await globTool.handler(
+      { pattern: "*.ts", path: tmpDir },
+      "s1",
+    );
+
+    const parsed = JSON.parse(result as string);
+    expect(parsed.filenames).toContain("forge-index.ts");
   });
 });

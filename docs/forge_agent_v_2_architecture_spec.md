@@ -305,6 +305,46 @@ ForgeAgent 的工具权限是执行边界，不是生命周期终态。
 8. permission_request / permission_response 是 durable audit 和 UI 同步事件；模型恢复主要依赖相邻合法 tool_result，避免在 provider tool_call/tool_result 协议中插入额外 system message。
 ```
 
+# 4.3 WorkspaceActivity / Work Model
+
+ForgeAgent 不引入 `CodingRuntime`。代码能力作为 workspace 能力的高密度场景实现，和文档、浏览器、MCP、Blender、研究、自动化共享同一条 Core/thread/tool/permission/artifact 轨道。
+
+WorkspaceActivity 规则：
+
+```txt
+1. WorkspaceActivityManager 只记录状态，不执行工具、不判断权限、不改变 session lifecycle。
+2. Scope 是 projectId + sessionId + branchId。read-file cache、diff、diagnostics、checks、background tasks 和 permission grants 都必须按这个 scope 隔离。
+3. 新事件包括：activity_event / todo_event / diff_event / diagnostic_event / verification_event / shell_task_event / worktree_event / permission_grant_event。
+4. tool_result 仍是 provider tool_call/tool_result 配对的事实；activity events 是额外 durable UI/context facts，不能破坏工具协议。
+5. context-window-builder 渲染短 activity facts；system prompt 可注入短 workspace_activity_summary，但最新 user message 和项目文件仍优先。
+6. Web/macOS/Android 右侧面板使用 Activity / Work 语义，不使用 Coding 面板，避免把能力收窄成代码产品。
+```
+
+编码能力适配：
+
+```txt
+1. enter_plan_mode / exit_plan_mode 提供 read-only planning gate；计划阶段只允许 read/search/LSP/git_diff/todo/ask_user，写入、shell、runtime、安装和持久变更会被 PermissionBroker 拒绝为普通工具错误。exit_plan_mode 默认创建 workspace_edits + safe_commands grants，作为安全 workspace autopilot；它不批准 package install、external runtime、network write、destructive action，也不能绕过 PathSandbox hard block 或 explicit deny。
+2. todo_write 维护当前计划；同一时刻最多一个 in_progress item，全部完成但尚无通过验证时必须提示 Agent 继续检查。
+3. read_file / write_file / edit_file / multi_edit_file / apply_patch_file / revert_file_change 使用 scoped readFileState，避免跨 project/session/branch 污染；read state 必须有 LRU/容量上限，并保留原文件 UTF-8/UTF-16LE BOM 与 CRLF/LF 风格。read_file 对不存在、目录、过大和不支持的二进制文件返回可读 tool_result isError=true；对图片、PDF、Jupyter notebook 返回可读 metadata/summary，避免把真实存在的非文本 workspace asset 误报成普通读取失败。
+4. write/edit/multi-edit/patch 成功后写 diff_event；diff_event 优先使用多 hunk 结构，超大 diff 才退回 bounded fallback。可撤销的小/中型文本编辑在同一 diff_event.checkpoint 中记录上一版快照和 after hash；revert_file_change 只能恢复最近一次可验证 checkpoint，且默认拒绝覆盖 checkpoint 之后的新变化。
+5. lsp_query / lsp_diagnostics 是 CodeIntelligenceAdapter 的工具面。TypeScript/JavaScript 使用 TypeScript language-service adapter 读取 workspace 内 tsconfig，支持 symbols / workspace_symbols / definition / implementation / references / hover / call_hierarchy / incoming_calls / outgoing_calls 和结构化 diagnostics；Python、Rust、Go、Java、Kotlin、Swift、C/C++、C#、Ruby、PHP 等常见语言先走 generic lexical multi-language code index，提供 symbols / workspace_symbols / definition / references / hover 风格的受限导航，并在输出中声明不是 full semantic LSP。implementation 和 call hierarchy 只由语义 adapter 支持；后续语言可以继续通过真实 language adapter 或 MCP 扩展。主动 lsp_diagnostics 会写 diagnostic_event + verification_event；没有 TS/JS 文件时不能伪装 clean，必须给出可恢复的 verify_workspace / language-specific MCP 路径；编辑 TS/JS 文件后的被动 diagnostics 只写 diagnostic_event，不伪装成完整 verification。
+6. file_search 默认使用 session projectRoot 或 active worktree 做模糊路径查找；glob 用于精确路径模式，并优先走 git-aware file index；grep 默认同样绑定 session projectRoot，避免多项目场景搜错目录。grep/glob 调 ripgrep 时必须使用 argv 数组而不是 shell 字符串拼接，并且只接受真实 `rg` 可执行文件，不能把 Claude/Codex wrapper 当作 ripgrep；grep 应支持 content/files/count、context、type、multiline 和 offset/head_limit 分页。
+7. git_diff 提供 repo-level status、changed files、diff stat、untracked files 和 bounded patch，是 Review Work 和 Agent 自检的事实入口。
+8. workspace_review 是最终 readiness gate：读取 durable activity，输出 ready/not-ready、证据、阻塞项和 recommended next actions；检查 open todos、未验证 diff、失败 checks、failed/stale diagnostics、running background tasks、最近失败 activity，以及最新 diff 后是否存在强验证。LSP diagnostics 是轻量反馈，不足以收尾；强验证必须来自 `verify_workspace` 或 bash 执行的安全 test/typecheck/check/build/lint（含常见 JS/TS、Python、Rust、Go、Swift、JVM、dotnet、Make 检查）。workspace_activity_summary 应提前提示最新 diff 晚于 latest passing check 的 readiness 风险；失败作为普通 tool_result isError=true 回流 Agent。
+9. agent_task 提供受限 read-only verify / explore / plan 子模型调用：复用主 ModelProvider 和 usage tracking，可使用 read/search/LSP/git_diff/verify_workspace/workspace_review/task_output 等安全工具，但不能编辑、安装、启动 runtime、询问用户或绕过 PermissionBroker/PathSandbox；不新增 runtime。verify 子任务必须按 skeptical release reviewer 语义处理缺失/过期/过窄证据，并输出 VERDICT: PASS|PARTIAL|FAIL。PARTIAL、FAIL 或缺失/非法 verdict 必须作为普通 tool_result isError=true 回流给主 Agent，同时写 failed activity_event；只有 PASS 可作为完成信号。它是独立审查信号，不替代真实 checks。
+10. bash 的测试、typecheck、lint、build 结果写 verification_event；后台 bash 写 shell_task_event，可由 task_output/task_kill 追踪和停止。后台 bash 如果运行的是安全 verification 命令，结束时也必须写 verification_event 和可解析 diagnostics，避免长检查完成后无法被 workspace_review 采纳。前台 bash 命令超过默认 15 秒仍运行时会自动转换为 background shell task 并返回 task id，避免长检查卡住 turn；grep/rg/diff 等命令的非错误退出码不能被误报为工具执行失败。
+11. enter_worktree / exit_worktree 创建/恢复/移除 git worktree 并记录 worktree_event；active worktree 会成为后续 turn 的 projectRoot 和 sandbox 根，但不创建独立 runtime。
+```
+
+权限收敛：
+
+```txt
+1. PermissionGrantManager 能力内聚在现有 ToolPolicyManager / PermissionBroker 中，不新增第二套权限系统。
+2. grant 类型包括 workspace_edits / safe_commands / package_install / external_runtime / network_write / destructive_action。
+3. Workspace autopilot 只创建 workspace_edits + safe_commands grant；它不等同于 Danger free，不能绕过 hard sandbox、explicit deny、secret exfiltration 或 destructive actions。
+4. grouped approval 应写 permission_grant_event，供 UI、审计和下一轮上下文读取。
+```
+
 Workspace sandbox 规则：
 
 ```txt

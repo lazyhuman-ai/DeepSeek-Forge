@@ -83,7 +83,7 @@ struct WebConsoleView: NSViewRepresentable {
             _ webView: WKWebView,
             runJavaScriptAlertPanelWithMessage message: String,
             initiatedByFrame frame: WKFrameInfo,
-            completionHandler: @escaping @MainActor @Sendable () -> Void
+            completionHandler: @escaping @Sendable () -> Void
         ) {
             let alert = NSAlert()
             alert.messageText = "ForgeAgent"
@@ -99,7 +99,7 @@ struct WebConsoleView: NSViewRepresentable {
             _ webView: WKWebView,
             runJavaScriptConfirmPanelWithMessage message: String,
             initiatedByFrame frame: WKFrameInfo,
-            completionHandler: @escaping @MainActor @Sendable (Bool) -> Void
+            completionHandler: @escaping @Sendable (Bool) -> Void
         ) {
             let alert = NSAlert()
             alert.messageText = "ForgeAgent"

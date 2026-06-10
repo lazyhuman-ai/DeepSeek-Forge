@@ -1,17 +1,21 @@
-import { writeFileSync, existsSync, statSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, statSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExecutableToolDefinition } from "../schemas.js";
 import { buildTool } from "../schemas.js";
-import { readFileState } from "../read-file-state.js";
+import { readFileStateForContext } from "../read-file-state.js";
 import { resolveToolPath, type ToolPathContext } from "./path-helper.js";
+import { buildStructuredDiff } from "../../workspace/diff.js";
+import { readTextFile, writeTextFile } from "../text-file-io.js";
+import { maybeRecordPassiveTypeScriptDiagnostics } from "./passive-diagnostics.js";
+import { buildEditCheckpoint } from "./edit-checkpoint.js";
 
-function normalizeLineEndings(content: string): string {
-  return content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+function toolError(output: string): { output: string; isError: true } {
+  return { output, isError: true };
 }
 
 async function handler(
   args: Record<string, unknown>,
-  _sessionId: string,
+  sessionId: string,
   context?: ToolPathContext,
 ): Promise<unknown> {
   const resolvedPath = resolveToolPath(args, context, {
@@ -22,18 +26,21 @@ async function handler(
   });
   if (!resolvedPath.ok) return resolvedPath;
   const filePath = resolvedPath.path;
-  const content = normalizeLineEndings(args.content as string);
+  const readFileState = readFileStateForContext(context);
+  const content = String(args.content ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
   const fileExists = existsSync(filePath);
+  const existingText = fileExists ? readTextFile(filePath) : undefined;
+  const beforeContent = existingText?.content ?? "";
 
   if (fileExists) {
     const state = readFileState.get(filePath);
     if (!state) {
-      return "File has not been read yet. Read it first before writing to it.";
+      return toolError("File has not been read yet. Read it first before writing to it.");
     }
-    const currentContent = readFileSync(filePath, "utf-8");
+    const currentContent = readTextFile(filePath).content;
     if (currentContent !== state.content) {
-      return "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.";
+      return toolError("File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.");
     }
   }
 
@@ -46,20 +53,41 @@ async function handler(
   if (fileExists) {
     const state = readFileState.get(filePath);
     if (state) {
-      const currentContent = readFileSync(filePath, "utf-8");
+      const currentContent = readTextFile(filePath).content;
       if (currentContent !== state.content) {
-        return "File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.";
+        return toolError("File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.");
       }
     }
   }
 
-  writeFileSync(filePath, content, "utf-8");
+  const state = readFileState.get(filePath);
+  writeTextFile(filePath, content, {
+    encoding: state?.encoding ?? existingText?.encoding ?? "utf8",
+    hadBom: state?.hadBom ?? existingText?.hadBom ?? false,
+    lineEnding: state?.lineEnding ?? existingText?.lineEnding ?? "\n",
+  });
 
   const newMtime = Math.floor(statSync(filePath).mtimeMs);
   readFileState.set(filePath, {
     content,
     mtimeMs: newMtime,
+    encoding: state?.encoding ?? existingText?.encoding ?? "utf8",
+    hadBom: state?.hadBom ?? existingText?.hadBom ?? false,
+    lineEnding: state?.lineEnding ?? existingText?.lineEnding ?? "\n",
   });
+
+  context?.workspaceActivity?.recordDiff(
+    sessionId,
+    buildStructuredDiff(filePath, beforeContent, content, fileExists ? "updated" : "created"),
+    context.branchId,
+    buildEditCheckpoint({
+      beforeExists: fileExists,
+      beforeContent,
+      afterContent: content,
+      ...(existingText !== undefined ? { beforeText: existingText } : {}),
+    }),
+  );
+  maybeRecordPassiveTypeScriptDiagnostics({ sessionId, filePath, context });
 
   if (fileExists) {
     return `File updated: ${filePath}`;

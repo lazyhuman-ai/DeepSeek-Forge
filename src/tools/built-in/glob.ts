@@ -1,22 +1,14 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { resolve, relative } from "node:path";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import type { ExecutableToolDefinition } from "../schemas.js";
 import { buildTool } from "../schemas.js";
 import { resolveToolPath, type ToolPathContext } from "./path-helper.js";
+import { buildWorkspaceFileIndex, matchWorkspaceGlob, sortWorkspaceFilesByMtime } from "../../workspace/file-index.js";
 
 const DEFAULT_MAX_RESULTS = 100;
 
 function findRgBinary(): string | null {
-  // Try the Claude Code bundled ripgrep first (via ARGV0 trick)
-  const claudePaths = [
-    process.env.CLAUDE_CODE_EXECPATH,
-    `${process.env.HOME}/.local/bin/claude`,
-  ];
-  for (const p of claudePaths) {
-    if (p && existsSync(p)) return p;
-  }
-  // Otherwise look for standalone rg
   try {
     const result = execSync("command -v rg", {
       encoding: "utf-8",
@@ -24,12 +16,12 @@ function findRgBinary(): string | null {
       timeout: 1000,
     }).trim();
     if (result && !result.includes("function")) {
-      try {
-        execSync(`"${result}" --version`, { timeout: 2000 });
-        return result;
-      } catch {
-        // not rg
-      }
+      execFileSync(result, ["--version"], {
+        encoding: "utf-8",
+        timeout: 2000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      return result;
     }
   } catch {
     // no rg found
@@ -37,15 +29,16 @@ function findRgBinary(): string | null {
   return null;
 }
 
-function execRg(args: string, cwd: string): string {
+function execRg(args: string[], cwd: string): string {
   const rgBin = findRgBinary();
   if (rgBin) {
-    return execSync(`ARGV0=rg "${rgBin}" ${args}`, {
+    return execFileSync(rgBin, args, {
       encoding: "utf-8",
       maxBuffer: 1024 * 1024,
       timeout: 10_000,
       cwd,
-      shell: "/bin/zsh",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ARGV0: "rg" },
     }).trim();
   }
   throw new Error("ripgrep not found");
@@ -106,7 +99,8 @@ async function handler(
   context?: ToolPathContext,
 ): Promise<unknown> {
   const pattern = args.pattern as string;
-  const resolvedPath = resolveToolPath(args.path ? args : { ...args, path: process.cwd() }, context, {
+  const defaultRoot = context?.projectRoot ?? process.cwd();
+  const resolvedPath = resolveToolPath(args.path ? args : { ...args, path: defaultRoot }, context, {
     argName: "path",
     access: "read",
     toolName: "glob",
@@ -118,11 +112,25 @@ async function handler(
   const searchDir = existsSync(path) && !path.includes("*") ? path : process.cwd();
 
   try {
+    const index = buildWorkspaceFileIndex(searchDir);
+    const indexedFiles = sortWorkspaceFilesByMtime(
+      index.root,
+      index.files.filter((file) => matchWorkspaceGlob(file, pattern)),
+    );
+    if (indexedFiles.length > 0) {
+      return JSON.stringify({
+        filenames: indexedFiles.slice(0, DEFAULT_MAX_RESULTS),
+        numFiles: indexedFiles.length,
+        truncated: indexedFiles.length > DEFAULT_MAX_RESULTS,
+        source: index.source,
+      });
+    }
+
     let result: string;
     try {
       result = execRg(
-        `--files --glob "${pattern}" --sort=modified --no-ignore --hidden "${searchDir}"`,
-        process.cwd(),
+        ["--files", "--glob", pattern, "--sort=modified", "--no-ignore", "--hidden", "."],
+        searchDir,
       );
     } catch {
       // fallback to native
@@ -139,7 +147,7 @@ async function handler(
 
     const files = result.split("\n")
       .slice(0, DEFAULT_MAX_RESULTS)
-      .map((f) => f.startsWith("/") ? relative(searchDir, f) : f);
+      .map((f) => f.startsWith("/") ? relative(searchDir, f) : f.replace(/^\.\//, ""));
     const truncated = result.split("\n").length > DEFAULT_MAX_RESULTS;
 
     return JSON.stringify({

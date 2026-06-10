@@ -146,6 +146,8 @@ function renderEvent(event: SessionEvent): string {
       return `[mcp_elicitation_request #${event.seq} ${event.serverName}]\n${event.message}`;
     case "mcp_elicitation_response":
       return `[mcp_elicitation_response #${event.seq} ${event.serverName} action=${event.action}]\n${event.message}`;
+    default:
+      return `[${event.type} #${event.seq}]\n${"message" in event && typeof event.message === "string" ? event.message : JSON.stringify(event, null, 2)}`;
   }
 }
 

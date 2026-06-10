@@ -64,6 +64,14 @@ export type CompactOptions = {
   requireUsage?: boolean;
 };
 
+export type SerializeCompactionOptions = {
+  maxToolResultChars?: number;
+  maxEventChars?: number;
+};
+
+const DEFAULT_COMPACTION_TOOL_RESULT_CHARS = 24_000;
+const DEFAULT_COMPACTION_EVENT_CHARS = 32_000;
+
 function makeAbortError(): Error {
   const err = new Error("Compaction aborted");
   err.name = "AbortError";
@@ -82,7 +90,33 @@ function safeJson(value: unknown): string {
   }
 }
 
-function eventToTranscript(event: SessionEvent): string | null {
+function compactTranscriptText(
+  text: string,
+  maxChars: number,
+  metadata: { label: string; seq: number },
+): string {
+  if (text.length <= maxChars) return text;
+  const safeMax = Math.max(1_000, maxChars);
+  const headChars = Math.max(600, Math.floor(safeMax * 0.65));
+  const tailChars = Math.max(300, safeMax - headChars);
+  const head = text.slice(0, headChars).trimEnd();
+  const tail = text.slice(Math.max(0, text.length - tailChars)).trimStart();
+  return [
+    `<compacted-transcript-content label="${metadata.label}" seq="${metadata.seq}" originalChars="${text.length}">`,
+    "Older large content was shortened before LLM compaction. Do not infer omitted details.",
+    "",
+    "<first>",
+    head,
+    "</first>",
+    "",
+    "<last>",
+    tail,
+    "</last>",
+    "</compacted-transcript-content>",
+  ].join("\n");
+}
+
+function eventToTranscript(event: SessionEvent, options: Required<SerializeCompactionOptions>): string | null {
   switch (event.type) {
     case "user_message":
       return `[user #${event.seq}]\n${event.text}`;
@@ -96,7 +130,11 @@ function eventToTranscript(event: SessionEvent): string | null {
     case "tool_result":
       return [
         `[tool_result #${event.seq} id=${event.toolUseId ?? `call_${event.seq - 1}`} name=${event.toolName} isError=${event.isError}]`,
-        typeof event.result === "string" ? event.result : safeJson(event.result),
+        compactTranscriptText(
+          typeof event.result === "string" ? event.result : safeJson(event.result),
+          options.maxToolResultChars,
+          { label: `tool_result:${event.toolName}`, seq: event.seq },
+        ),
       ].join("\n");
     case "trigger_event":
       return `[trigger_event #${event.seq} kind=${event.triggerKind}]\n${safeJson(event.payload)}`;
@@ -120,6 +158,22 @@ function eventToTranscript(event: SessionEvent): string | null {
       return `[skill_used #${event.seq} name=${event.skillName} version=${event.version}]\n${event.message}`;
     case "skill_event":
       return `[skill_event #${event.seq} action=${event.action} name=${event.skillName ?? ""}]\n${event.message}`;
+    case "activity_event":
+      return `[activity_event #${event.seq} kind=${event.activityKind} status=${event.status}]\n${event.title}\n${event.message}`;
+    case "todo_event":
+      return `[todo_event #${event.seq}]\n${event.items.map((item) => `- [${item.status}] ${item.content}`).join("\n")}`;
+    case "diff_event":
+      return `[diff_event #${event.seq} operation=${event.operation} path=${event.filePath} additions=${event.additions} deletions=${event.deletions}]\n${event.summary}`;
+    case "diagnostic_event":
+      return `[diagnostic_event #${event.seq} source=${event.source} status=${event.status}]\n${compactTranscriptText(event.message, options.maxEventChars, { label: "diagnostic_event", seq: event.seq })}`;
+    case "verification_event":
+      return `[verification_event #${event.seq} status=${event.status} command=${event.command}]\n${compactTranscriptText(event.summary, options.maxEventChars, { label: "verification_event", seq: event.seq })}`;
+    case "shell_task_event":
+      return `[shell_task_event #${event.seq} task=${event.taskId} status=${event.status}]\n${event.message}`;
+    case "worktree_event":
+      return `[worktree_event #${event.seq} action=${event.action}]\n${event.message}`;
+    case "permission_grant_event":
+      return `[permission_grant_event #${event.seq} action=${event.action} kind=${event.grantKind}]\n${event.message}`;
     case "mcp_elicitation_request":
       return `[mcp_elicitation_request #${event.seq} id=${event.elicitationId} server=${event.serverName}]\n${event.message}`;
     case "mcp_elicitation_response":
@@ -129,9 +183,13 @@ function eventToTranscript(event: SessionEvent): string | null {
   }
 }
 
-export function serializeEventsForCompaction(events: SessionEvent[]): string {
+export function serializeEventsForCompaction(events: SessionEvent[], options?: SerializeCompactionOptions): string {
+  const resolved: Required<SerializeCompactionOptions> = {
+    maxToolResultChars: options?.maxToolResultChars ?? DEFAULT_COMPACTION_TOOL_RESULT_CHARS,
+    maxEventChars: options?.maxEventChars ?? DEFAULT_COMPACTION_EVENT_CHARS,
+  };
   return events
-    .map(eventToTranscript)
+    .map((event) => eventToTranscript(event, resolved))
     .filter((entry): entry is string => entry !== null)
     .join("\n\n---\n\n");
 }

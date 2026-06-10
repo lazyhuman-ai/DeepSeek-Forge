@@ -96,6 +96,33 @@ describe("Compactor", () => {
     expect(transcript).toContain("failed: missing file");
   });
 
+  it("shortens very large tool results before sending them to the compaction model", () => {
+    const huge = [
+      "BEGIN-IMPORTANT",
+      "x".repeat(20_000),
+      "END-IMPORTANT",
+    ].join("\n");
+    const events: ToolResult[] = [
+      {
+        type: "tool_result",
+        seq: 42,
+        timestamp: ts,
+        sessionId: sid,
+        toolName: "bash",
+        result: huge,
+        isError: false,
+        toolUseId: "tc_large",
+      },
+    ];
+
+    const transcript = serializeEventsForCompaction(events, { maxToolResultChars: 1_200 });
+
+    expect(transcript).toContain("<compacted-transcript-content");
+    expect(transcript).toContain("BEGIN-IMPORTANT");
+    expect(transcript).toContain("END-IMPORTANT");
+    expect(transcript.length).toBeLessThan(huge.length);
+  });
+
   it("throws when provider fails instead of using heuristic fallback", async () => {
     const provider = makeProvider(new Error("summary provider failed"));
     const events: UserMessage[] = [

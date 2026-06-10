@@ -6,6 +6,7 @@ export function buildSystemPrompt(options: {
   skillCatalog?: SkillCatalog;
   skillContext?: SkillRenderContext;
   memoryStore?: MemoryStore;
+  workspaceActivitySummary?: string;
   sessionId: string;
 }): string {
   const parts: string[] = [
@@ -33,7 +34,31 @@ export function buildSystemPrompt(options: {
     "- If the user asks to create a standalone HTML page, app, document, or file, write it to a file and summarize where it was saved.",
     "- If the user explicitly asks to show, render, preview, or include HTML in the conversation, return the relevant safe HTML/Markdown directly in your assistant message instead of only writing a file.",
     "- Do not include unsafe scripts or event-handler attributes in conversational HTML. Use fenced code blocks when the user wants source code rather than rendered content.",
+    "",
+    "Workspace activity:",
+    "- Code work is a high-density workspace task, not a separate runtime. Use the same thread, tools, permissions, artifacts, and verification flow for code, docs, browser, Blender, MCP, research, and automation.",
+    "- For complex or ambiguous work, enter_plan_mode before changing the workspace. In plan mode you may inspect, search, use LSP, run git_diff, update todos, or ask the user, but changing tools are blocked until exit_plan_mode. Exiting plan mode normally creates safe workspace autopilot grants for workspace edits and safe checks; it does not approve package installs, external runtimes, network writes, destructive actions, or sandbox escapes.",
+    "- Use todo_write for multi-step work. Keep todos current when plans change or checks fail.",
+    "- Prefer read_file before edit_file, multi_edit_file, or apply_patch_file. These tools maintain scoped read state per project/session/branch and record reversible edit checkpoints when possible. Use revert_file_change to undo the latest ForgeAgent edit to a file when you need to recover from your own bad edit.",
+    "- When editing UI code or markup, preserve existing ids, data attributes, test hooks, accessibility attributes, and public selectors unless the user explicitly asks to remove or rename them.",
+    "- Use file_search when you know part of a filename/path but not an exact glob. Use glob for exact path patterns and grep for content search.",
+    "- Use lsp_diagnostics after TypeScript/JavaScript edits when compiler feedback can catch errors. Use lsp_query for definitions, references, symbols, or hover-like context.",
+    "- Use git_diff before final answers on code/workspace changes so you can review changed files, untracked files, diff stat, and bounded patch.",
+    "- Use verify_workspace for real safe checks after code/workspace changes. It detects safe project checks across common JS/TS, Python, Rust, Go, Swift, JVM, dotnet, and Make-based workspaces, records verification evidence, and captures diagnostics.",
+    "- Use workspace_review before final answers after workspace changes. Treat it as the readiness gate: if it reports not-ready, unresolved issues, recommended next actions, unverified changes, failed checks, open todos, failed/stale diagnostics, or running tasks, resolve those facts or explicitly tell the user what remains.",
+    "- For complex coding, refactoring, or release-sensitive work, use agent_task with subagent_type=verify after verify_workspace or bash has produced evidence. agent_task is a constrained read-only reviewer that may use safe read/search/LSP/git-diff/verification tools when available, but it cannot edit files or bypass permissions.",
+    "- Use bash for checks or builds that verify_workspace cannot express. Safe workspace checks are normally allowed; package installs, destructive commands, and external runtimes may require approval. Long foreground bash commands may be moved to background shell tasks; use task_output to continue monitoring and task_kill to stop them.",
+    "- If a tool error reports stale file state, diagnostics, permission, sandbox, or runtime failure, read the returned text and recover using the available workspace facts.",
   ];
+
+  if (options.workspaceActivitySummary?.trim()) {
+    parts.push(
+      "\n<workspace_activity_summary>\n" +
+        "Historical workspace progress reference. Latest user messages and project files still win.\n" +
+        options.workspaceActivitySummary.trim() +
+        "\n</workspace_activity_summary>",
+    );
+  }
 
   // Skills
   if (options.skillCatalog) {

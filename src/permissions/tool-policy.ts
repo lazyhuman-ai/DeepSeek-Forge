@@ -1,10 +1,12 @@
 import type {
+  PermissionGrantKind,
   PermissionRequestEvent,
   PermissionResponseEvent,
 } from "../streams/event-types.js";
 import type { ToolCapability, ToolDefinition } from "../tools/schemas.js";
 import type { PathSandbox } from "../sandbox/path-sandbox.js";
 import { getSensitivePathReason } from "../sandbox/path-sandbox.js";
+import { isSafeWorkspaceVerificationCommand } from "../workspace/verification-commands.js";
 
 export type ToolRequestSource = {
   kind: "http" | "repl" | "cli" | "trigger" | "system" | "unknown";
@@ -81,6 +83,16 @@ export type ToolPermissionResult =
   | { allowed: true }
   | { allowed: false; message: string };
 
+export type PermissionGrant = {
+  grantId: string;
+  sessionId: string;
+  grantKind: PermissionGrantKind;
+  scope: "session" | "project" | "branch";
+  branchId?: string;
+  createdAt: string;
+  expiresAt?: string;
+};
+
 type PendingRequest = PublicPermissionRequest & {
   resolve: (decision: PermissionResolutionDecision) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -130,6 +142,16 @@ function firstString(args: Record<string, unknown>, keys: string[]): string | nu
     if (typeof value === "string" && value.trim()) return value;
   }
   return null;
+}
+
+function firstStringArray(args: Record<string, unknown>, keys: string[]): string[] {
+  for (const key of keys) {
+    const value = args[key];
+    if (Array.isArray(value)) {
+      return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+    }
+  }
+  return [];
 }
 
 function subjectFromArgs(toolName: string, args: Record<string, unknown>): string {
@@ -226,6 +248,10 @@ const FIND_WRITE_OPTIONS = new Set([
 
 const PACKAGE_MANAGER_COMMANDS = new Set(["npm", "pnpm", "yarn", "bun"]);
 const SAFE_PACKAGE_SCRIPTS = new Set(["typecheck", "check", "build", "lint", "format", "test"]);
+const SAFE_COMMAND_ARG_RE = /^[A-Za-z0-9_@%+=:,./-]+$/;
+const MAX_SAFE_SHELL_COMMAND_CHARS = 8_000;
+const MAX_SAFE_SHELL_SEGMENTS = 50;
+const MAX_SAFE_SHELL_WORDS_PER_SEGMENT = 200;
 
 function tokenizeShellCommand(command: string): ShellToken[] | null {
   const tokens: ShellToken[] = [];
@@ -324,14 +350,28 @@ function commandPathsAllowed(input: ToolPolicyInput, words: string[]): boolean {
   return words.every((word) => pathTokenAllowed(input, word));
 }
 
+function safeCommandArgs(words: string[]): boolean {
+  return words.every((word) => word === "--" || SAFE_COMMAND_ARG_RE.test(word));
+}
+
 function safePackageManagerCommand(words: string[]): boolean {
   const command = words[0];
   if (!command || !PACKAGE_MANAGER_COMMANDS.has(command)) return false;
-  return words.length === 3 && words[1] === "run" && SAFE_PACKAGE_SCRIPTS.has(words[2]!);
+  if (words[1] === "test") return safeCommandArgs(words.slice(2));
+  return words.length >= 3 &&
+    words[1] === "run" &&
+    SAFE_PACKAGE_SCRIPTS.has(words[2]!) &&
+    safeCommandArgs(words.slice(3));
 }
 
 function safeNpxCommand(words: string[]): boolean {
-  return words.length === 3 && words[0] === "npx" && words[1] === "tsc" && words[2] === "--noEmit";
+  if (words[0] !== "npx") return false;
+  const tscIndex = words[1] === "--no-install" ? 2 : 1;
+  if (words[tscIndex] !== "tsc") return false;
+  const args = words.slice(tscIndex + 1);
+  if (!args.includes("--noEmit")) return false;
+  const allowed = new Set(["--noEmit", "--pretty", "false", "true", "--pretty=false", "--pretty=true"]);
+  return args.every((word) => allowed.has(word));
 }
 
 function safeGitCommand(input: ToolPolicyInput, words: string[]): boolean {
@@ -344,13 +384,24 @@ function safeGitCommand(input: ToolPolicyInput, words: string[]): boolean {
   return commandPathsAllowed(input, args);
 }
 
+function safeSedCommand(input: ToolPolicyInput, words: string[]): boolean {
+  if (words[0] !== "sed") return false;
+  if (words[1] !== "-n") return false;
+  const script = words[2];
+  if (!script || !/^\d+(?:,\d+)?p$/.test(script)) return false;
+  const paths = words.slice(3);
+  return paths.length > 0 && commandPathsAllowed(input, paths);
+}
+
 function safeBashSegment(input: ToolPolicyInput, words: string[]): boolean {
   if (words.length === 0 || hasBlockedShellExpansion(words)) return false;
+  if (isSafeWorkspaceVerificationCommand(words.join(" "))) return true;
   const command = words[0]!;
   if (command.includes("/")) return false;
   if (command === "echo") return true;
   if (safePackageManagerCommand(words) || safeNpxCommand(words)) return true;
   if (command === "git") return safeGitCommand(input, words);
+  if (command === "sed") return safeSedCommand(input, words);
   if (!SAFE_BASH_COMMANDS.has(command)) return false;
   if (command === "find" && words.some((word) => FIND_WRITE_OPTIONS.has(word))) return false;
   if (command === "rg" && words.some((word) => word === "--pre" || word.startsWith("--pre="))) {
@@ -362,14 +413,45 @@ function safeBashSegment(input: ToolPolicyInput, words: string[]): boolean {
 function safeBashCommandReason(input: ToolPolicyInput): string | null {
   if (input.tool.name !== "bash") return null;
   if (input.args.run_in_background === true) return null;
-  const command = firstString(input.args, ["command"]);
+  const rawCommand = firstString(input.args, ["command"]);
+  const command = rawCommand
+    ?.trim()
+    .replace(/\s+2>\s*&1\s*$/u, "")
+    .replace(/\s+2>\s*\/dev\/null\s*$/u, "");
   if (!command) return null;
+  if (command.length > MAX_SAFE_SHELL_COMMAND_CHARS) return null;
   const tokens = tokenizeShellCommand(command);
   if (!tokens) return null;
   const segments = splitShellSegments(tokens);
   if (!segments) return null;
-  if (!segments.every((segment) => safeBashSegment(input, segment))) return null;
+  if (
+    segments.length > MAX_SAFE_SHELL_SEGMENTS ||
+    segments.some((segment) => segment.length > MAX_SAFE_SHELL_WORDS_PER_SEGMENT)
+  ) {
+    return null;
+  }
+  const effectiveSegments = (
+    segments.length > 1 &&
+    segments[0]?.length === 2 &&
+    segments[0][0] === "cd" &&
+    pathTokenAllowed(input, segments[0][1]!)
+  )
+    ? segments.slice(1)
+    : segments;
+  if (!effectiveSegments.every((segment) => safeBashSegment(input, segment))) return null;
   return "Read-only shell inspection commands inside the workspace are allowed by default policy.";
+}
+
+function safeVerifyWorkspaceReason(input: ToolPolicyInput): string | null {
+  if (input.tool.name !== "verify_workspace") return null;
+  const commands = firstStringArray(input.args, ["commands"]);
+  if (commands.length === 0) {
+    return "Automatic workspace verification uses only detected safe test/typecheck/check/build/lint commands.";
+  }
+  if (commands.every(isSafeWorkspaceVerificationCommand)) {
+    return "Safe workspace verification commands are allowed by default policy.";
+  }
+  return null;
 }
 
 function bashPackageInstallReason(input: ToolPolicyInput): string | null {
@@ -408,6 +490,8 @@ export class ToolPolicyManager {
   #rules: ToolPolicyRule[] = [];
   #sessionAllowances = new Set<string>();
   #dangerouslyAllowedSessions = new Set<string>();
+  #planModeSessions = new Set<string>();
+  #grants = new Map<string, PermissionGrant>();
 
   constructor(options?: { rules?: ToolPolicyRule[] }) {
     this.#rules = [...(options?.rules ?? [])];
@@ -433,10 +517,85 @@ export class ToolPolicyManager {
     return this.#dangerouslyAllowedSessions.has(sessionId);
   }
 
+  setPlanMode(sessionId: string, enabled: boolean): void {
+    if (enabled) {
+      this.#planModeSessions.add(sessionId);
+    } else {
+      this.#planModeSessions.delete(sessionId);
+    }
+  }
+
+  isPlanMode(sessionId: string): boolean {
+    return this.#planModeSessions.has(sessionId);
+  }
+
+  createGrant(input: Omit<PermissionGrant, "grantId" | "createdAt"> & { grantId?: string; createdAt?: string }): PermissionGrant {
+    const grant: PermissionGrant = {
+      grantId: input.grantId ?? crypto.randomUUID(),
+      sessionId: input.sessionId,
+      grantKind: input.grantKind,
+      scope: input.scope,
+      ...(input.branchId !== undefined ? { branchId: input.branchId } : {}),
+      createdAt: input.createdAt ?? new Date().toISOString(),
+      ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+    };
+    this.#grants.set(grant.grantId, grant);
+    return grant;
+  }
+
+  revokeGrant(grantId: string): PermissionGrant | undefined {
+    const grant = this.#grants.get(grantId);
+    if (!grant) return undefined;
+    this.#grants.delete(grantId);
+    return grant;
+  }
+
+  listGrants(sessionId?: string): PermissionGrant[] {
+    this.#expireOldGrants();
+    return [...this.#grants.values()].filter((grant) => sessionId === undefined || grant.sessionId === sessionId);
+  }
+
+  #expireOldGrants(): void {
+    const nowMs = Date.now();
+    for (const [grantId, grant] of this.#grants) {
+      if (grant.expiresAt && Date.parse(grant.expiresAt) <= nowMs) {
+        this.#grants.delete(grantId);
+      }
+    }
+  }
+
+  #hasGrant(input: ToolPolicyInput, grantKind: PermissionGrantKind): boolean {
+    this.#expireOldGrants();
+    for (const grant of this.#grants.values()) {
+      if (grant.sessionId !== input.sessionId) continue;
+      if (grant.grantKind !== grantKind) continue;
+      if (grant.scope === "branch" && grant.branchId !== input.branchId) continue;
+      return true;
+    }
+    return false;
+  }
+
   evaluate(input: ToolPolicyInput): ToolPolicyDecision {
     const capabilities = input.tool.capabilities ?? [];
     const action = capabilityAction(capabilities);
     const subject = subjectFromArgs(input.tool.name, input.args);
+    const requestedPath = pathFromArgs(input.args);
+
+    if (this.#planModeSessions.has(input.sessionId)) {
+      const planModeAllowed = input.tool.isReadOnly === true ||
+        input.tool.name === "todo_write" ||
+        input.tool.name === "ask_user" ||
+        input.tool.name === "enter_plan_mode" ||
+        input.tool.name === "exit_plan_mode";
+      if (!planModeAllowed) {
+        return {
+          decision: "deny",
+          action,
+          subject,
+          reason: "Plan mode is active. The agent may inspect, search, read, update the plan, or ask the user, but it cannot modify files, run commands, launch runtimes, or change persistent state until it exits plan mode.",
+        };
+      }
+    }
 
     if (this.#sessionAllowances.has(sessionAllowanceKey(input, action, subject))) {
       return {
@@ -459,6 +618,54 @@ export class ToolPolicyManager {
       };
     }
 
+    if (
+      (input.tool.name === "write_file" ||
+        input.tool.name === "edit_file" ||
+        input.tool.name === "multi_edit_file" ||
+        input.tool.name === "apply_patch_file" ||
+        input.tool.name === "revert_file_change") &&
+      this.#hasGrant(input, "workspace_edits") &&
+      requestedPath &&
+      input.pathSandbox?.resolvePath(requestedPath, "write", input.tool.name, "fs.write").ok
+    ) {
+      return {
+        decision: "allow",
+        action,
+        subject,
+        reason: "Workspace edit autopilot is enabled for this session; sandbox checks still apply.",
+      };
+    }
+
+    const safeBashReason = safeBashCommandReason(input);
+    if (safeBashReason && this.#hasGrant(input, "safe_commands")) {
+      return {
+        decision: "allow",
+        action,
+        subject,
+        reason: "Safe command autopilot is enabled for this session.",
+      };
+    }
+
+    const safeVerifyReason = safeVerifyWorkspaceReason(input);
+    if (safeVerifyReason && this.#hasGrant(input, "safe_commands")) {
+      return {
+        decision: "allow",
+        action,
+        subject,
+        reason: "Safe command autopilot is enabled for this session.",
+      };
+    }
+
+    const packageInstallReason = bashPackageInstallReason(input);
+    if (packageInstallReason && this.#hasGrant(input, "package_install")) {
+      return {
+        decision: "allow",
+        action,
+        subject,
+        reason: "Package install permission grant is enabled for this session.",
+      };
+    }
+
     if (this.#dangerouslyAllowedSessions.has(input.sessionId)) {
       return {
         decision: "allow",
@@ -477,7 +684,6 @@ export class ToolPolicyManager {
       };
     }
 
-    const requestedPath = pathFromArgs(input.args);
     if (requestedPath) {
       const sensitive = getSensitivePathReason(requestedPath);
       if (sensitive) {
@@ -507,7 +713,6 @@ export class ToolPolicyManager {
       }
     }
 
-    const safeBashReason = safeBashCommandReason(input);
     if (safeBashReason) {
       return {
         decision: "allow",
@@ -517,7 +722,15 @@ export class ToolPolicyManager {
       };
     }
 
-    const packageInstallReason = bashPackageInstallReason(input);
+    if (safeVerifyReason) {
+      return {
+        decision: "allow",
+        action,
+        subject,
+        reason: safeVerifyReason,
+      };
+    }
+
     if (packageInstallReason) {
       return {
         decision: "ask",
@@ -575,7 +788,13 @@ export class ToolPolicyManager {
       };
     }
 
-    if (input.tool.name === "write_file" || input.tool.name === "edit_file") {
+    if (
+      input.tool.name === "write_file" ||
+      input.tool.name === "edit_file" ||
+      input.tool.name === "multi_edit_file" ||
+      input.tool.name === "apply_patch_file" ||
+      input.tool.name === "revert_file_change"
+    ) {
       if (requestedPath && input.pathSandbox) {
         const resolved = input.pathSandbox.resolvePath(
           requestedPath,
@@ -691,6 +910,28 @@ export class PermissionBroker {
 
   isDangerouslyAllowingAllTools(sessionId: string): boolean {
     return this.#policy.isDangerouslyAllowingAllTools(sessionId);
+  }
+
+  setPlanMode(sessionId: string, enabled: boolean): void {
+    this.#policy.setPlanMode(sessionId, enabled);
+  }
+
+  isPlanMode(sessionId: string): boolean {
+    return this.#policy.isPlanMode(sessionId);
+  }
+
+  createPermissionGrant(
+    input: Omit<PermissionGrant, "grantId" | "createdAt"> & { grantId?: string; createdAt?: string },
+  ): PermissionGrant {
+    return this.#policy.createGrant(input);
+  }
+
+  revokePermissionGrant(grantId: string): PermissionGrant | undefined {
+    return this.#policy.revokeGrant(grantId);
+  }
+
+  listPermissionGrants(sessionId?: string): PermissionGrant[] {
+    return this.#policy.listGrants(sessionId);
   }
 
   approvePendingRequestsForSession(

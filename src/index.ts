@@ -29,8 +29,16 @@ export { buildSystemPrompt } from "./agent/system-prompt-builder.js";
 export { ToolRegistry } from "./tools/tool-registry.js";
 export { ToolRuntime } from "./tools/tool-runtime.js";
 export type * from "./tools/schemas.js";
+export {
+  buildWorkspaceActivityState,
+  buildWorkspaceActivitySummary,
+  WorkspaceActivityManager,
+} from "./workspace/activity-manager.js";
+export type * from "./workspace/activity-manager.js";
+export { buildStructuredDiff } from "./workspace/diff.js";
 export { PermissionBroker, ToolPolicyManager, buildPermissionDeniedMessage } from "./permissions/tool-policy.js";
 export type {
+  PermissionGrant,
   PermissionRequestStatus,
   PermissionResponseDecision,
   PublicPermissionRequest,

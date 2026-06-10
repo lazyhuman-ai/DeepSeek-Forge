@@ -15,6 +15,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete process.env.CLAUDE_CODE_EXECPATH;
   // cleanup handled by beforeEach
 });
 
@@ -58,14 +59,83 @@ describe("grep", () => {
     expect(result).not.toContain("b.js");
   });
 
+  it("supports files and count output modes", async () => {
+    writeFileSync(tmpPath("a.ts"), "foo\nfoo\nbar");
+    writeFileSync(tmpPath("b.ts"), "bar\nfoo");
+
+    const files = await grepTool.handler(
+      { pattern: "foo", path: tmpDir, output_mode: "files" },
+      "s1",
+    );
+    expect(files).toContain("a.ts");
+    expect(files).toContain("b.ts");
+
+    const counts = await grepTool.handler(
+      { pattern: "foo", path: tmpDir, output_mode: "count" },
+      "s1",
+    );
+    expect(counts).toContain("a.ts:2");
+    expect(counts).toContain("b.ts:1");
+  });
+
+  it("supports paged content output", async () => {
+    writeFileSync(tmpPath("many.ts"), Array.from({ length: 8 }, (_v, i) => `const foo${i} = ${i};`).join("\n"));
+
+    const result = await grepTool.handler(
+      { pattern: "foo", path: tmpDir, head_limit: 2, offset: 3 },
+      "s1",
+    );
+    expect(result).toContain("foo3");
+    expect(result).toContain("foo4");
+    expect(result).not.toContain("foo0");
+  });
+
+  it("passes patterns as argv instead of shell fragments", async () => {
+    writeFileSync(tmpPath("safe.ts"), "const literal = \"foo; rm -rf /\";");
+
+    const result = await grepTool.handler(
+      { pattern: "foo; rm -rf /", path: tmpDir },
+      "s1",
+    );
+
+    expect(result).toContain("safe.ts");
+    expect(result).toContain("foo; rm -rf /");
+  });
+
   it("handles regex patterns", async () => {
     writeFileSync(tmpPath("code.ts"), "const x1 = 1;\nconst x2 = 2;\nconst y = 3;");
     const result = await grepTool.handler(
-      { pattern: "const x\\\\d", path: tmpDir },
+      { pattern: "const x\\d", path: tmpDir },
       "s1",
     );
     expect(result).toContain("const x1");
     expect(result).toContain("const x2");
     expect(result).not.toContain("const y");
+  });
+
+  it("defaults to the session project root when path is omitted", async () => {
+    writeFileSync(tmpPath("project.ts"), "const projectOnly = true;");
+
+    const result = await grepTool.handler(
+      { pattern: "projectOnly" },
+      "s1",
+      { projectRoot: tmpDir },
+    );
+
+    expect(result).toContain("project.ts");
+    expect(result).toContain("projectOnly");
+  });
+
+  it("does not treat the Claude executable path as ripgrep", async () => {
+    process.env.CLAUDE_CODE_EXECPATH = "/bin/false";
+    writeFileSync(tmpPath("code.ts"), "const forgeSearch = true;");
+
+    const result = await grepTool.handler(
+      { pattern: "forgeSearch", path: tmpDir },
+      "s1",
+    );
+
+    expect(result).toContain("code.ts");
+    expect(result).toContain("forgeSearch");
   });
 });

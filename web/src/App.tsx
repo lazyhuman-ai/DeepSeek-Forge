@@ -27,11 +27,12 @@ import type {
   SetupStatus,
   TerminalOutputEvent,
   TerminalSession,
+  WorkspaceActivityState,
 } from "./types";
 
 type LoadState = "booting" | "ready" | "error";
 type MainView = "chat" | "extensions";
-type RailPanel = "provider" | "android" | "browser" | "mcp" | "context" | "permissions" | "notifications" | "memory" | "skills";
+type RailPanel = "provider" | "android" | "browser" | "mcp" | "context" | "activity" | "permissions" | "notifications" | "memory" | "skills";
 type VoiceInputState = "idle" | "recording" | "transcribing";
 type VoiceSampleChunk = { start: number; end: number; samples: Float32Array };
 
@@ -255,6 +256,7 @@ export function App() {
   const [dangerBusy, setDangerBusy] = useState(false);
   const [dangerNotice, setDangerNotice] = useState("");
   const [dangerConfirm, setDangerConfirm] = useState(false);
+  const [autopilotBusy, setAutopilotBusy] = useState(false);
   const [projectBusy, setProjectBusy] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalBusy, setTerminalBusy] = useState(false);
@@ -306,6 +308,10 @@ export function App() {
   const renderThread = useMemo(
     () => buildRenderEvents(thread),
     [thread],
+  );
+  const activity = useMemo(
+    () => buildWorkspaceActivityFromThread(thread, selected?.id ?? ""),
+    [thread, selected?.id],
   );
   const deletableSessions = useMemo(
     () => sessions.filter((session) => (
@@ -1308,6 +1314,36 @@ export function App() {
     }
   }
 
+  async function enableWorkspaceAutopilot() {
+    if (!selected) {
+      setError("Select a session before enabling workspace autopilot.");
+      return;
+    }
+    setAutopilotBusy(true);
+    setDangerNotice("");
+    setError("");
+    try {
+      await api.createPermissionGrant({
+        sessionId: selected.id,
+        grantKind: "workspace_edits",
+        scope: "session",
+        branchId: selectedBranchId,
+      });
+      await api.createPermissionGrant({
+        sessionId: selected.id,
+        grantKind: "safe_commands",
+        scope: "session",
+        branchId: selectedBranchId,
+      });
+      await loadThread(selected.id, selectedBranchId);
+      setDangerNotice("Workspace autopilot is on for edits and safe checks.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAutopilotBusy(false);
+    }
+  }
+
   function appendTerminalEvents(events: TerminalOutputEvent[]) {
     if (events.length === 0) return;
     terminalSeqRef.current = events.reduce((max, event) => Math.max(max, event.seq), terminalSeqRef.current);
@@ -1540,7 +1576,7 @@ export function App() {
               className="new-session icon-button"
               onClick={() => void createSession()}
               disabled={busy || projectBusy || !selectedProject}
-              aria-label="New session"
+              aria-label="+ New Session"
               title="New session"
             >
               +
@@ -1770,6 +1806,24 @@ export function App() {
             >
               {dangerBusy ? "Updating…" : selected?.dangerouslyAllowAllTools ? "Danger free: on" : "Danger free"}
             </button>
+            <button
+              type="button"
+              className="composer-tool-button"
+              onClick={() => void enableWorkspaceAutopilot()}
+              disabled={!selected || autopilotBusy || selected?.status === "running"}
+              title="Allow workspace edits and safe check commands for this session"
+            >
+              {autopilotBusy ? "Enabling…" : "Autopilot"}
+            </button>
+            <button
+              type="button"
+              className="composer-tool-button"
+              onClick={() => setRailPanel("activity")}
+              disabled={!selected}
+              title="Review plans, changes, diagnostics, checks, tasks, and worktree state"
+            >
+              Review work
+            </button>
             {dangerConfirm ? (
               <span className="danger-confirm">
                 <span>Bypass approvals?</span>
@@ -1867,6 +1921,7 @@ export function App() {
           setup={setup}
           diagnostics={diagnostics}
           usage={usage}
+          activity={activity}
           pendingPermissions={pendingPermissions}
           deviceState={deviceState}
           onSelect={(panel) => setRailPanel((current) => current === panel ? null : panel)}
@@ -1878,6 +1933,7 @@ export function App() {
               setup={setup}
               diagnostics={diagnostics}
               usage={usage}
+              activity={activity}
               pendingPermissions={pendingPermissions}
               deviceState={deviceState}
               onSetNotificationsEnabled={setWebNotificationsEnabled}
@@ -1889,6 +1945,7 @@ export function App() {
               setup={setup}
               diagnostics={diagnostics}
               usage={usage}
+              activity={activity}
               pendingPermissions={pendingPermissions}
               deviceState={deviceState}
               onSelect={setRailPanel}
@@ -1907,6 +1964,7 @@ function parseRailPanel(value: string | null): RailPanel | null {
     case "browser":
     case "mcp":
     case "context":
+    case "activity":
     case "permissions":
     case "notifications":
     case "memory":
@@ -1915,6 +1973,45 @@ function parseRailPanel(value: string | null): RailPanel | null {
     default:
       return null;
   }
+}
+
+function buildWorkspaceActivityFromThread(events: SessionEvent[], sessionId: string): WorkspaceActivityState {
+  const latestTodo = [...events].reverse().find((event): event is Extract<SessionEvent, { type: "todo_event" }> => event.type === "todo_event");
+  const latestDiagnostics = [...events].reverse().find((event): event is Extract<SessionEvent, { type: "diagnostic_event" }> => event.type === "diagnostic_event");
+  const changesByFile = new Map<string, WorkspaceActivityState["changes"][number]>();
+  for (const event of events) {
+    if (event.type !== "diff_event") continue;
+    changesByFile.set(event.filePath, {
+      filePath: event.filePath,
+      operation: event.operation,
+      additions: event.additions,
+      deletions: event.deletions,
+      seq: event.seq,
+      summary: event.summary,
+    });
+  }
+  const worktree = [...events].reverse().find((event): event is Extract<SessionEvent, { type: "worktree_event" }> => event.type === "worktree_event");
+  return {
+    sessionId,
+    todos: latestTodo?.items ?? [],
+    changes: [...changesByFile.values()].sort((a, b) => a.filePath.localeCompare(b.filePath)),
+    diagnostics: latestDiagnostics?.diagnostics ?? [],
+    checks: events.filter((event): event is Extract<SessionEvent, { type: "verification_event" }> => event.type === "verification_event").slice(-10),
+    shellTasks: events.filter((event): event is Extract<SessionEvent, { type: "shell_task_event" }> => event.type === "shell_task_event").slice(-20),
+    ...(worktree !== undefined ? { worktree } : {}),
+    permissionGrants: events.filter((event): event is Extract<SessionEvent, { type: "permission_grant_event" }> => event.type === "permission_grant_event").slice(-20),
+    recent: events
+      .filter((event): event is Extract<SessionEvent, { type: "activity_event" }> => event.type === "activity_event")
+      .slice(-12)
+      .map((event) => ({
+        seq: event.seq,
+        timestamp: event.timestamp,
+        kind: event.activityKind,
+        status: event.status,
+        title: event.title,
+        message: event.message,
+      })),
+  };
 }
 
 function terminalStatusText(session: TerminalSession | null, busy: boolean): string {
@@ -2925,6 +3022,86 @@ function EventBlock(props: {
   if (event.type === "permission_response") {
     return <article className="note-line">{event.message}</article>;
   }
+  if (event.type === "todo_event") {
+    return (
+      <article className="activity-card">
+        <Meta label="Plan" time={event.timestamp} />
+        <ul>
+          {event.items.map((item) => (
+            <li key={item.id} data-status={item.status}>
+              <span>{item.status.replace("_", " ")}</span>
+              {item.content}
+            </li>
+          ))}
+        </ul>
+      </article>
+    );
+  }
+  if (event.type === "diff_event") {
+    return (
+      <article className="activity-card diff">
+        <Meta label={`Change · ${event.operation}`} time={event.timestamp} />
+        <p><strong>{event.filePath}</strong></p>
+        <p>{event.summary}</p>
+        {event.diff?.hunks?.length ? (
+          <details>
+            <summary>View patch</summary>
+            <pre>{event.diff.hunks.flatMap((hunk) => [
+              `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`,
+              ...hunk.lines,
+            ]).join("\n")}</pre>
+          </details>
+        ) : null}
+      </article>
+    );
+  }
+  if (event.type === "diagnostic_event") {
+    return (
+      <article className={`activity-card diagnostics ${event.status}`}>
+        <Meta label={`Diagnostics · ${event.source}`} time={event.timestamp} />
+        <p>{event.message}</p>
+        {event.diagnostics.length ? (
+          <ul>
+            {event.diagnostics.slice(0, 8).map((diagnostic, index) => (
+              <li key={`${diagnostic.filePath ?? "unknown"}-${diagnostic.line ?? 0}-${index}`}>
+                <span>{diagnostic.severity}</span>
+                {diagnostic.filePath ? `${diagnostic.filePath}${diagnostic.line ? `:${diagnostic.line}` : ""} ` : ""}
+                {diagnostic.message}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </article>
+    );
+  }
+  if (event.type === "verification_event") {
+    return (
+      <article className={`activity-card check ${event.status}`}>
+        <Meta label={`Check · ${event.status}`} time={event.timestamp} />
+        <p><code>{event.command}</code></p>
+        <p>{event.summary}</p>
+      </article>
+    );
+  }
+  if (event.type === "shell_task_event") {
+    return (
+      <article className={`activity-card shell-task ${event.status}`}>
+        <Meta label={`Task · ${event.taskId}`} time={event.timestamp} />
+        <p>{event.message}</p>
+        <p><code>{event.command}</code></p>
+        {event.outputPreview ? <pre>{event.outputPreview}</pre> : null}
+      </article>
+    );
+  }
+  if (event.type === "worktree_event") {
+    return <article className="note-line">Worktree: {event.message}</article>;
+  }
+  if (event.type === "permission_grant_event") {
+    return <article className="note-line">Permission: {event.message}</article>;
+  }
+  if (event.type === "activity_event") {
+    return <article className="note-line">{event.title}: {event.message}</article>;
+  }
   if (event.type === "mcp_elicitation_request") {
     return (
       <article className="permission-card">
@@ -3102,6 +3279,7 @@ function InspectorOverview(props: {
   setup: SetupStatus | null;
   diagnostics: Diagnostics | null;
   usage: SessionUsageSummary | null;
+  activity: WorkspaceActivityState;
   pendingPermissions: PermissionRequest[];
   deviceState: DeviceState | null;
   onSelect: (panel: RailPanel) => void;
@@ -3120,6 +3298,12 @@ function InspectorOverview(props: {
       label: "Context",
       value: contextPercent !== undefined ? `${contextPercent.toFixed(0)}% used` : "No usage yet",
       tone: contextPercent !== undefined && contextPercent > 80 ? "warn" : "neutral",
+    },
+    {
+      panel: "activity",
+      label: "Activity",
+      value: `${props.activity.changes.length} changes · ${props.activity.checks.length} checks`,
+      tone: props.activity.diagnostics.some((item) => item.severity === "error") ? "warn" : "neutral",
     },
     {
       panel: "permissions",
@@ -3171,6 +3355,7 @@ function InspectorOverview(props: {
             type="button"
             className={`inspector-menu-item tone-${item.tone ?? "neutral"}`}
             onClick={() => props.onSelect(item.panel)}
+            aria-label={`open ${item.label.toLowerCase()} details`}
           >
             <span className="line-glyph" aria-hidden="true" />
             <span>
@@ -3189,6 +3374,7 @@ function StatusRail(props: {
   setup: SetupStatus | null;
   diagnostics: Diagnostics | null;
   usage: SessionUsageSummary | null;
+  activity: WorkspaceActivityState;
   pendingPermissions: PermissionRequest[];
   deviceState: DeviceState | null;
   onSelect: (panel: RailPanel) => void;
@@ -3236,6 +3422,14 @@ function StatusRail(props: {
         label={contextPercent !== undefined ? `Context ${contextPercent.toFixed(0)}%` : "Context"}
         active={props.activePanel === "context"}
         percent={contextPercent}
+        onSelect={props.onSelect}
+      />
+      <RailButton
+        panel="activity"
+        label={`Activity · ${props.activity.changes.length} changes`}
+        active={props.activePanel === "activity"}
+        badge={props.activity.diagnostics.filter((item) => item.severity === "error").length}
+        tone={props.activity.diagnostics.some((item) => item.severity === "error") ? "warn" : "neutral"}
         onSelect={props.onSelect}
       />
       <RailButton
@@ -3305,6 +3499,7 @@ function StatusDrawer(props: {
   setup: SetupStatus | null;
   diagnostics: Diagnostics | null;
   usage: SessionUsageSummary | null;
+  activity: WorkspaceActivityState;
   pendingPermissions: PermissionRequest[];
   deviceState: DeviceState | null;
   onSetNotificationsEnabled: (enabled: boolean) => Promise<void>;
@@ -3313,6 +3508,27 @@ function StatusDrawer(props: {
 }) {
   const contextPercent = props.usage?.contextUsedPercent;
   const cache = props.usage?.cacheHitRateNow ?? props.usage?.cacheHitRateAverage;
+  const diagnosticErrors = props.activity.diagnostics.filter((item) => item.severity === "error").length;
+  const failedChecks = props.activity.checks.filter((check) => check.status === "failed").length;
+  const openTodos = props.activity.todos.filter((item) => item.status !== "completed" && item.status !== "cancelled").length;
+  const latestWorkspaceReview = [...props.activity.recent].reverse().find((item) => item.title === "Workspace review");
+  const reviewPayload = latestWorkspaceReview?.payload ?? {};
+  const reviewReady = typeof reviewPayload.ready === "boolean" ? reviewPayload.ready : undefined;
+  const reviewIssues = Array.isArray(reviewPayload.issues)
+    ? reviewPayload.issues.filter((item): item is string => typeof item === "string")
+    : [];
+  const reviewNextActions = Array.isArray(reviewPayload.nextActions)
+    ? reviewPayload.nextActions.filter((item): item is string => typeof item === "string")
+    : [];
+  const reviewState = reviewReady === false
+    ? "Needs attention"
+    : reviewReady === true
+      ? "Ready"
+      : diagnosticErrors > 0 || failedChecks > 0
+        ? "Needs attention"
+        : props.activity.changes.length > 0 || props.activity.checks.length > 0
+          ? "Ready to review"
+          : "No work recorded";
   async function runMcpAction(action: () => Promise<unknown>) {
     try {
       const result = await action();
@@ -3390,6 +3606,102 @@ function StatusDrawer(props: {
           ["Cache", cache !== undefined ? `${cache.toFixed(1)}%` : "—"],
           ["Cost", props.usage?.cost !== undefined ? `${props.usage.cost.toFixed(6)} ${props.usage.currency ?? ""}`.trim() : "—"],
         ]} />
+      ) : null}
+      {props.panel === "activity" ? (
+        <div className="drawer-list">
+          <div className={`drawer-card review-summary ${reviewState === "Needs attention" ? "warn" : "ok"}`}>
+            <strong>{reviewState}</strong>
+            <p>
+              {openTodos} open todos · {props.activity.changes.length} changed files · {diagnosticErrors} errors · {failedChecks} failed checks
+            </p>
+            {latestWorkspaceReview ? <p>{latestWorkspaceReview.message}</p> : null}
+            {reviewIssues.length > 0 ? (
+              <div className="drawer-mini-list">
+                <span>Issues</span>
+                {reviewIssues.slice(0, 4).map((issue) => <p key={issue}>{issue}</p>)}
+              </div>
+            ) : null}
+            {reviewNextActions.length > 0 ? (
+              <div className="drawer-mini-list">
+                <span>Next actions</span>
+                {reviewNextActions.slice(0, 4).map((action) => <p key={action}>{action}</p>)}
+              </div>
+            ) : null}
+          </div>
+          <DrawerRows rows={[
+            ["Open todos", String(openTodos)],
+            ["Changed files", String(props.activity.changes.length)],
+            ["Diagnostics", String(props.activity.diagnostics.length)],
+            ["Checks", String(props.activity.checks.length)],
+            ["Tasks", String(props.activity.shellTasks.length)],
+          ]} />
+          {props.activity.worktree ? (
+            <div className="drawer-card">
+              <strong>Worktree</strong>
+              <p>{props.activity.worktree.message}</p>
+              {props.activity.worktree.path ? <code>{props.activity.worktree.path}</code> : null}
+            </div>
+          ) : null}
+          {props.activity.todos.length > 0 ? (
+            <div className="drawer-card">
+              <strong>Plan</strong>
+              {props.activity.todos.slice(0, 6).map((item) => (
+                <p key={item.id}>{item.status.replace("_", " ")} · {item.content}</p>
+              ))}
+            </div>
+          ) : null}
+          {props.activity.changes.length > 0 ? (
+            <div className="drawer-card">
+              <strong>Changes</strong>
+              {props.activity.changes.slice(0, 8).map((change) => (
+                <p key={`${change.filePath}-${change.seq}`}>
+                  <span>{change.operation}</span> {change.filePath} (+{change.additions}/-{change.deletions})
+                </p>
+              ))}
+            </div>
+          ) : null}
+          {props.activity.checks.length > 0 ? (
+            <div className="drawer-card">
+              <strong>Checks</strong>
+              {props.activity.checks.slice(-5).map((check) => (
+                <p key={check.seq}>
+                  <span>{check.status}</span> <code>{check.command}</code>
+                  <br />
+                  {check.summary}
+                </p>
+              ))}
+            </div>
+          ) : null}
+          {props.activity.diagnostics.length > 0 ? (
+            <div className="drawer-card">
+              <strong>Diagnostics</strong>
+              {props.activity.diagnostics.slice(0, 6).map((diagnostic, index) => (
+                <p key={`${diagnostic.filePath ?? "diagnostic"}-${index}`}>
+                  <span>{diagnostic.severity}</span> {diagnostic.filePath ?? "workspace"}{diagnostic.line ? `:${diagnostic.line}` : ""} {diagnostic.code ?? ""} {diagnostic.message}
+                </p>
+              ))}
+            </div>
+          ) : null}
+          {props.activity.permissionGrants.length > 0 ? (
+            <div className="drawer-card">
+              <strong>Permission grants</strong>
+              {props.activity.permissionGrants.slice(-5).map((grant) => (
+                <p key={grant.grantId}><span>{grant.action}</span> {grant.grantKind} · {grant.scope}</p>
+              ))}
+            </div>
+          ) : null}
+          {props.activity.recent.length > 0 ? (
+            <div className="drawer-card">
+              <strong>Recent activity</strong>
+              {props.activity.recent.slice(-5).map((item) => (
+                <p key={item.seq}><span>{item.status}</span> {item.title}: {item.message}</p>
+              ))}
+            </div>
+          ) : null}
+          {props.activity.todos.length === 0 && props.activity.changes.length === 0 && props.activity.checks.length === 0 && props.activity.diagnostics.length === 0 && props.activity.recent.length === 0 ? (
+            <p className="drawer-empty">No workspace activity recorded for this session yet.</p>
+          ) : null}
+        </div>
       ) : null}
       {props.panel === "permissions" ? (
         props.pendingPermissions.length > 0 ? (
@@ -3845,6 +4157,7 @@ function drawerTitle(panel: RailPanel): string {
     case "browser": return "Chrome";
     case "mcp": return "MCP";
     case "context": return "Context";
+    case "activity": return "Activity";
     case "permissions": return "Permissions";
     case "notifications": return "Notifications";
     case "memory": return "Memory";

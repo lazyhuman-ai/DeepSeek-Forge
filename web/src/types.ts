@@ -374,6 +374,86 @@ export type PermissionRequest = {
   expiresAt: string;
 };
 
+export type ActivityKind =
+  | "plan"
+  | "change"
+  | "diagnostic"
+  | "verification"
+  | "shell_task"
+  | "worktree"
+  | "artifact"
+  | "browser"
+  | "mcp"
+  | "permission"
+  | "failure";
+
+export type ActivityStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "blocked"
+  | "cancelled"
+  | "info";
+
+export type TodoItem = {
+  id: string;
+  content: string;
+  status: "pending" | "in_progress" | "completed" | "cancelled";
+};
+
+export type StructuredDiff = {
+  filePath: string;
+  operation: "created" | "updated" | "deleted";
+  additions: number;
+  deletions: number;
+  hunks: Array<{
+    oldStart: number;
+    oldLines: number;
+    newStart: number;
+    newLines: number;
+    lines: string[];
+  }>;
+};
+
+export type DiagnosticItem = {
+  filePath?: string;
+  line?: number;
+  character?: number;
+  severity: "error" | "warning" | "info";
+  message: string;
+  source?: string;
+  code?: string;
+};
+
+export type WorkspaceActivityState = {
+  sessionId: string;
+  branchId?: string;
+  todos: TodoItem[];
+  changes: Array<{
+    filePath: string;
+    operation: "created" | "updated" | "deleted";
+    additions: number;
+    deletions: number;
+    seq: number;
+    summary: string;
+  }>;
+  diagnostics: DiagnosticItem[];
+  checks: Extract<SessionEvent, { type: "verification_event" }>[];
+  shellTasks: Extract<SessionEvent, { type: "shell_task_event" }>[];
+  worktree?: Extract<SessionEvent, { type: "worktree_event" }>;
+  permissionGrants: Extract<SessionEvent, { type: "permission_grant_event" }>[];
+  recent: Array<{
+    seq: number;
+    timestamp: string;
+    kind: ActivityKind;
+    status: ActivityStatus;
+    title: string;
+    message: string;
+    payload?: Record<string, unknown>;
+  }>;
+};
+
 export type SessionEvent =
   | { type: "user_message"; seq: number; timestamp: string; branchId?: string; text: string; variantOfSeq?: number }
   | { type: "assistant_message"; seq: number; timestamp: string; branchId?: string; text: string }
@@ -382,6 +462,14 @@ export type SessionEvent =
   | { type: "tool_result"; seq: number; timestamp: string; sessionId?: string; branchId?: string; toolName: string; result: unknown; isError: boolean; toolUseId?: string }
   | { type: "permission_request"; seq: number; timestamp: string; branchId?: string; permissionRequestId: string; toolName: string; action: string; subject: string; message: string; reason: string; status: "pending"; expiresAt: string }
   | { type: "permission_response"; seq: number; timestamp: string; branchId?: string; permissionRequestId: string; toolName: string; decision: string; status: string; message: string }
+  | { type: "activity_event"; seq: number; timestamp: string; branchId?: string; activityKind: ActivityKind; status: ActivityStatus; title: string; message: string; payload?: Record<string, unknown> }
+  | { type: "todo_event"; seq: number; timestamp: string; branchId?: string; items: TodoItem[]; message: string }
+  | { type: "diff_event"; seq: number; timestamp: string; branchId?: string; filePath: string; operation: "created" | "updated" | "deleted"; additions: number; deletions: number; summary: string; diff?: StructuredDiff }
+  | { type: "diagnostic_event"; seq: number; timestamp: string; branchId?: string; source: string; status: "clean" | "issues" | "failed"; diagnostics: DiagnosticItem[]; message: string }
+  | { type: "verification_event"; seq: number; timestamp: string; branchId?: string; command: string; status: "running" | "passed" | "failed"; exitCode?: number; summary: string; artifactId?: string }
+  | { type: "shell_task_event"; seq: number; timestamp: string; branchId?: string; taskId: string; action: "started" | "output" | "completed" | "failed" | "killed"; command: string; status: "running" | "completed" | "failed" | "killed"; message: string; outputPreview?: string; exitCode?: number }
+  | { type: "worktree_event"; seq: number; timestamp: string; branchId?: string; action: "entered" | "exited" | "kept" | "removed" | "failed"; path?: string; branch?: string; message: string }
+  | { type: "permission_grant_event"; seq: number; timestamp: string; branchId?: string; grantId: string; grantKind: "workspace_edits" | "safe_commands" | "package_install" | "external_runtime" | "network_write" | "destructive_action"; action: "created" | "revoked" | "expired"; scope: "session" | "project" | "branch"; message: string; expiresAt?: string }
   | { type: "runtime_event"; seq: number; timestamp: string; branchId?: string; runtimeKind: string; detail: string; message: string }
   | { type: "branch_event"; seq: number; timestamp: string; branchId?: string; sourceBranchId: string; sourceUserMessageSeq: number; variantOfSeq: number; newBranchId: string; message: string }
   | { type: "artifact_pointer"; seq: number; timestamp: string; branchId?: string; artifactId: string; mimeType: string; sizeBytes: number }

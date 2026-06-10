@@ -177,6 +177,17 @@ test.describe("ForgeAgent Web Console", () => {
     await expect(page.locator(".inline-error")).toHaveCount(0);
   });
 
+  test("opens Review Work from the composer without leaving the message flow", async ({ page }) => {
+    await ensureToken(page);
+    await page.getByRole("button", { name: "+ New Session" }).click();
+    await page.getByRole("button", { name: "Review work" }).click();
+    await expect(page.locator(".status-drawer")).toBeVisible();
+    await expect(page.locator(".drawer-header")).toContainText("Activity");
+    await expect(page.locator(".review-summary strong")).toHaveText("No work recorded");
+    const metrics = await layoutMetrics(page);
+    expect(metrics.bodyScrollHeight).toBeLessThanOrEqual(metrics.viewportHeight + 1);
+  });
+
   test("reconciles a running session to blocked when SSE misses the provider failure event", async ({ page }) => {
     await ensureToken(page);
     const sessionId = "sse-missed-running";

@@ -1,7 +1,11 @@
 import { resolve } from "node:path";
+import type { ToolExecutionContext } from "../../agent/tool-executor.js";
 import type { PathSandbox, SandboxAccess } from "../../sandbox/path-sandbox.js";
 
-export type ToolPathContext = {
+export type ToolPathContext = Pick<
+  ToolExecutionContext,
+  "pathSandbox" | "workspaceActivity" | "branchId" | "readFileStateScope" | "projectRoot" | "signal"
+> & {
   pathSandbox?: PathSandbox;
 };
 

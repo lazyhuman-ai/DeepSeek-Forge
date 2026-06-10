@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http, { type IncomingMessage } from "node:http";
@@ -77,6 +77,44 @@ function now(): number {
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
+}
+
+function hasTypeScriptVerificationEvidence(events: SessionEvent[]): boolean {
+  const hasVerificationTool = events.some((event) => (
+    event.type === "tool_call" &&
+    (
+      (event.toolName === "bash" && JSON.stringify(event.args).includes("tsc")) ||
+      event.toolName === "verify_workspace" ||
+      event.toolName === "lsp_diagnostics"
+    )
+  ));
+  const hasDurableVerification = events.some((event) => (
+    event.type === "verification_event" &&
+    (
+      /\b(?:tsc|typecheck|check|test|build|lint)\b/i.test(event.command) ||
+      /\b(?:tsc|TypeScript|typecheck|check|test|build|lint)\b/i.test(event.summary)
+    )
+  ));
+  return hasVerificationTool && hasDurableVerification;
+}
+
+function hasPassedTypeScriptVerification(checks: SessionEvent[]): boolean {
+  return checks.some((event) => (
+    event.type === "verification_event" &&
+    event.status === "passed" &&
+    (
+      /\b(?:tsc|typecheck|check|test|build|lint)\b/i.test(event.command) ||
+      /\b(?:tsc|TypeScript|typecheck|check|test|build|lint)\b/i.test(event.summary)
+    )
+  ));
+}
+
+function hasPassedWorkspaceTest(checks: SessionEvent[]): boolean {
+  return checks.some((event) => (
+    event.type === "verification_event" &&
+    event.status === "passed" &&
+    /\b(?:test|check|make test|unittest|pytest)\b/i.test(`${event.command}\n${event.summary}`)
+  ));
 }
 
 function sleep(ms: number): Promise<void> {
@@ -221,6 +259,12 @@ function assertToolPairs(events: SessionEvent[]): void {
   assert(missing.length === 0, `Dangling tool_call(s): ${missing.map((id) => `${id}:${calls.get(id)}`).join(", ")}`);
 }
 
+function successfulToolUseIds(events: SessionEvent[], toolName: string): string[] {
+  return events
+    .filter((event): event is ToolResult => event.type === "tool_result" && event.toolName === toolName && event.isError !== true)
+    .map((event) => event.toolUseId ?? `seq_${event.seq - 1}`);
+}
+
 function serialize(value: unknown): string {
   if (typeof value === "string") return value;
   try {
@@ -270,6 +314,12 @@ async function runChild(command: string, args: string[], env: NodeJS.ProcessEnv)
 }
 
 async function scenarioRealMcp(ctx: ReleaseContext): Promise<{ detail: string; diagnostics: Record<string, unknown> }> {
+  const project = ctx.api.createProject({
+    name: "Release MCP Workspace",
+    path: ctx.workspaceDir,
+    create: true,
+    trustState: "trusted",
+  });
   ctx.api.addMcpServer({
     id: "release_fs",
     name: "release_fs",
@@ -321,8 +371,8 @@ async function scenarioRealMcp(ctx: ReleaseContext): Promise<{ detail: string; d
     assert(registryNames.has(expected), `Missing expected MCP utility tool in registry: ${expected}. Registry tools=${[...registryNames].join(", ")}`);
   }
 
-  await scenarioMcpDirectProtocol(ctx);
-  await scenarioMcpAgentFilesystem(ctx);
+  await scenarioMcpDirectProtocol(ctx, project.id);
+  await scenarioMcpAgentFilesystem(ctx, project.id);
   await scenarioMcpHttpSurface();
 
   return {
@@ -334,8 +384,8 @@ async function scenarioRealMcp(ctx: ReleaseContext): Promise<{ detail: string; d
   };
 }
 
-async function scenarioMcpDirectProtocol(ctx: ReleaseContext): Promise<void> {
-  const session = ctx.api.createSession(`${RUN_ID} mcp direct protocol`);
+async function scenarioMcpDirectProtocol(ctx: ReleaseContext, projectId: string): Promise<void> {
+  const session = ctx.api.createSession(`${RUN_ID} mcp direct protocol`, { projectId });
   const runtime = new ToolRuntime(ctx.registry);
   const execute = async (toolName: string, args: Record<string, unknown> = {}) => {
     const result = await runtime.execute(toolName, args, session.id, {
@@ -379,9 +429,9 @@ async function scenarioMcpDirectProtocol(ctx: ReleaseContext): Promise<void> {
   );
 }
 
-async function scenarioMcpAgentFilesystem(ctx: ReleaseContext): Promise<void> {
+async function scenarioMcpAgentFilesystem(ctx: ReleaseContext, projectId: string): Promise<void> {
   const targetPath = join(ctx.workspaceDir, "mcp-agent-write.txt");
-  const session = ctx.api.createSession(`${RUN_ID} mcp agent filesystem`);
+  const session = ctx.api.createSession(`${RUN_ID} mcp agent filesystem`, { projectId });
   ctx.autoResponses.set(session.id, "allow_once");
   ctx.api.appendUserMessage(
     session.id,
@@ -407,6 +457,739 @@ async function scenarioMcpAgentFilesystem(ctx: ReleaseContext): Promise<void> {
   assert(answer.includes("SOAK_MCP_AGENT_OK"), `Agent did not produce MCP recovery answer: ${answer}`);
   assertToolPairs(events);
   ctx.autoResponses.delete(session.id);
+}
+
+function runGitCommand(cwd: string, args: string[]): void {
+  execFileSync("git", args, {
+    cwd,
+    stdio: "ignore",
+    env: {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_ASKPASS: "true",
+      SSH_ASKPASS: "true",
+    },
+  });
+}
+
+function prepareCodingWorkspace(ctx: ReleaseContext): { projectDir: string; targetPath: string } {
+  const projectDir = join(ctx.workspaceDir, "coding-agent-workspace");
+  rmSync(projectDir, { recursive: true, force: true });
+  mkdirSync(join(projectDir, "src"), { recursive: true });
+  writeFileSync(join(projectDir, "package.json"), JSON.stringify({
+    name: "forgeagent-release-coding-workspace",
+    private: true,
+    type: "module",
+    scripts: {
+      typecheck: "tsc --noEmit --pretty false",
+    },
+    devDependencies: {
+      typescript: "^5.8.0",
+    },
+  }, null, 2), "utf-8");
+  writeFileSync(join(projectDir, "tsconfig.json"), JSON.stringify({
+    compilerOptions: {
+      strict: true,
+      noEmit: true,
+      target: "ES2022",
+      module: "ESNext",
+      moduleResolution: "Bundler",
+      types: [],
+    },
+    include: ["src/**/*.ts"],
+  }, null, 2), "utf-8");
+  const targetPath = join(projectDir, "src", "math.ts");
+  writeFileSync(targetPath, [
+    "export type Visit = {",
+    "  user: string;",
+    "  count: number;",
+    "};",
+    "",
+    "// Contract: return the numeric sum of all visit counts.",
+    "export function totalVisits(visits: Visit[]): number {",
+    "  return visits.map((visit) => visit.count).join(\",\");",
+    "}",
+    "",
+    "export function renderSummary(visits: Visit[]): string {",
+    "  return `total=${totalVisits(visits)}`;",
+    "}",
+    "",
+  ].join("\n"), "utf-8");
+  writeFileSync(join(projectDir, "src", "index.ts"), [
+    "import { renderSummary } from \"./math.js\";",
+    "",
+    "console.log(renderSummary([{ user: \"release\", count: 2 }]));",
+    "",
+  ].join("\n"), "utf-8");
+
+  runGitCommand(projectDir, ["init"]);
+  runGitCommand(projectDir, ["config", "user.email", "release-e2e@forgeagent.local"]);
+  runGitCommand(projectDir, ["config", "user.name", "ForgeAgent Release E2E"]);
+  runGitCommand(projectDir, ["add", "."]);
+  runGitCommand(projectDir, ["commit", "-m", "initial failing TypeScript fixture"]);
+  return { projectDir, targetPath };
+}
+
+async function scenarioAgentCodingWorkspace(ctx: ReleaseContext): Promise<{ detail: string; diagnostics: Record<string, unknown> }> {
+  const { projectDir, targetPath } = prepareCodingWorkspace(ctx);
+  const project = ctx.api.createProject({
+    name: "Release Coding Workspace",
+    path: projectDir,
+    create: true,
+    trustState: "trusted",
+  });
+  const session = ctx.api.createSession(`${RUN_ID} agent coding workspace`, { projectId: project.id });
+  ctx.autoResponses.set(session.id, "allow_once");
+  ctx.api.appendUserMessage(
+    session.id,
+    [
+      "This is a ForgeAgent release gate for coding ability. Work only inside the current workspace.",
+      "The TypeScript project currently fails typecheck because src/math.ts returns a string from totalVisits.",
+      "The function contract is correct: totalVisits must keep returning number and must compute the numeric sum of visit counts.",
+      "Use todo_write to plan, read_file to inspect src/math.ts, lsp_diagnostics to see diagnostics,",
+      "edit_file, multi_edit_file, or apply_patch_file to make the smallest structured code edit, verify_workspace to run the safe typecheck,",
+      "and git_diff to inspect the patch.",
+      "After verify_workspace and git_diff, call agent_task with subagent_type=verify and tool_mode=read_only to independently verify that the latest diff is covered by the passing typecheck.",
+      "After agent_task returns VERDICT: PASS, mark every todo completed and call workspace_review as the final readiness gate before your final answer.",
+      "Do not use write_file to overwrite the whole file, and do not use bash/perl/sed/python to edit the source.",
+      "When typecheck passes, answer with the prefix CODING_AGENT_OK and mention the changed file.",
+    ].join(" "),
+    { source: DEVICE_SOURCE },
+  );
+  await waitForSessionStatus(ctx.api, session.id, ["idle"]);
+  const events = ctx.api.getThread(session.id);
+  assertToolPairs(events);
+  const thread = threadTypes(events);
+  const toolCalls = events.filter((event) => event.type === "tool_call");
+  const called = (toolName: string) => toolCalls.some((event) => event.toolName === toolName);
+  assert(called("todo_write"), `Agent did not record a plan. Thread=${thread}`);
+  assert(called("read_file"), `Agent did not inspect the source file. Thread=${thread}`);
+  assert(called("lsp_diagnostics"), `Agent did not use TypeScript diagnostics. Thread=${thread}`);
+  assert(called("edit_file") || called("multi_edit_file") || called("apply_patch_file"), `Agent did not use structured edit tools. Thread=${thread}`);
+  assert(!called("write_file"), `Agent used write_file instead of a bounded edit tool. Thread=${thread}`);
+  assert(hasTypeScriptVerificationEvidence(events), `Agent did not run TypeScript verification. Thread=${thread}`);
+  assert(!events.some((event) => (
+    event.type === "tool_call" &&
+    event.toolName === "bash" &&
+    /\b(?:sed|perl|python|node)\b/.test(String(event.args.command ?? ""))
+  )), `Agent edited through a shell/runtime command instead of ForgeAgent edit tools. Thread=${thread}`);
+  assert(!events.some((event) => (
+    event.type === "permission_request" &&
+    event.toolName === "bash" &&
+    event.subject.includes("tsc")
+  )), "Safe TypeScript verification unexpectedly requested user approval.");
+  assert(called("git_diff"), `Agent did not review the git diff. Thread=${thread}`);
+  assert(called("workspace_review"), `Agent did not run workspace_review before finalizing. Thread=${thread}`);
+  assert(called("agent_task"), `Agent did not run read-only agent_task verification before finalizing. Thread=${thread}`);
+  const agentTaskPass = events.find((event) => (
+    event.type === "tool_result" &&
+    event.toolName === "agent_task" &&
+    event.isError !== true &&
+    /VERDICT\s*:\s*PASS/i.test(String(event.result))
+  ));
+  assert(agentTaskPass, `agent_task verifier did not return VERDICT: PASS. Thread=${thread}`);
+  const readyReview = events.find((event) => (
+    event.type === "tool_result" &&
+    event.toolName === "workspace_review" &&
+    event.isError !== true &&
+    /ready for final response/i.test(String(event.result))
+  ));
+  assert(readyReview, `workspace_review did not report readiness. Thread=${thread}`);
+  assert(readyReview.seq > agentTaskPass.seq, `workspace_review readiness must happen after agent_task PASS. Thread=${thread}`);
+
+  const fixedSource = readFileSync(targetPath, "utf-8");
+  assert(fixedSource.includes("reduce") || fixedSource.includes("+ visit.count"), `TypeScript source was not repaired as a numeric total:\n${fixedSource}`);
+  assert(fixedSource.includes("totalVisits(visits: Visit[]): number"), `TypeScript source changed the public return contract instead of fixing the implementation:\n${fixedSource}`);
+  assert(!fixedSource.includes(".join("), `TypeScript source still returns joined string:\n${fixedSource}`);
+  execFileSync("npx", ["tsc", "--noEmit", "--pretty", "false"], {
+    cwd: projectDir,
+    stdio: "pipe",
+    timeout: 120_000,
+    env: process.env,
+  });
+
+  const diagnostics = ctx.api.getDiagnostics(session.id);
+  assert(diagnostics.filter((diagnostic) => diagnostic.severity === "error").length === 0, `Diagnostics still contain errors: ${JSON.stringify(diagnostics, null, 2)}`);
+  const checks = ctx.api.getVerificationResults(session.id);
+  assert(hasPassedTypeScriptVerification(checks), `No passed TypeScript verification recorded: ${JSON.stringify(checks, null, 2)}`);
+  const diffs = ctx.api.getSessionDiffs(session.id);
+  assert(diffs.some((diff) => diff.filePath === targetPath && diff.operation === "updated"), `No structured diff was recorded for ${targetPath}`);
+  const activity = ctx.api.getWorkspaceActivity(session.id);
+  assert(activity.changes.some((change) => change.filePath === targetPath), "Workspace activity did not include the changed source file.");
+  const answer = lastAssistantText(events);
+  assert(answer.includes("CODING_AGENT_OK"), `Agent did not produce coding success marker: ${answer}`);
+  ctx.autoResponses.delete(session.id);
+  return {
+    detail: `fixed=${targetPath}; checks=${checks.length}; diffs=${diffs.length}; tools=${toolCalls.map((event) => event.toolName).join(",")}`,
+    diagnostics: {
+      projectDir,
+      targetPath,
+      activity,
+    },
+  };
+}
+
+function preparePythonCodeIndexWorkspace(ctx: ReleaseContext): {
+  projectDir: string;
+  targetPath: string;
+  testPath: string;
+} {
+  const projectDir = join(ctx.workspaceDir, "coding-agent-python-code-index");
+  rmSync(projectDir, { recursive: true, force: true });
+  mkdirSync(join(projectDir, "src"), { recursive: true });
+  mkdirSync(join(projectDir, "tests"), { recursive: true });
+  writeFileSync(join(projectDir, "src", "__init__.py"), "", "utf-8");
+  const targetPath = join(projectDir, "src", "pricing.py");
+  const testPath = join(projectDir, "tests", "test_pricing.py");
+  writeFileSync(targetPath, [
+    "class PriceCalculator:",
+    "    def subtotal(self, items):",
+    "        # Contract: return the numeric sum of item prices.",
+    "        return \",\".join(str(item[\"price\"]) for item in items)",
+    "",
+    "",
+    "def format_invoice(items):",
+    "    calculator = PriceCalculator()",
+    "    return f\"subtotal={calculator.subtotal(items)}\"",
+    "",
+  ].join("\n"), "utf-8");
+  writeFileSync(testPath, [
+    "import unittest",
+    "",
+    "from src.pricing import PriceCalculator, format_invoice",
+    "",
+    "",
+    "class PricingTest(unittest.TestCase):",
+    "    def test_subtotal_is_numeric_sum(self):",
+    "        items = [{\"price\": 2.5}, {\"price\": 10.0}]",
+    "        self.assertEqual(PriceCalculator().subtotal(items), 12.5)",
+    "",
+    "    def test_invoice_uses_numeric_subtotal(self):",
+    "        items = [{\"price\": 2.5}, {\"price\": 10.0}]",
+    "        self.assertEqual(format_invoice(items), \"subtotal=12.5\")",
+    "",
+    "",
+    "if __name__ == \"__main__\":",
+    "    unittest.main()",
+    "",
+  ].join("\n"), "utf-8");
+  writeFileSync(join(projectDir, "Makefile"), [
+    "test:",
+    "\tpython3 -m unittest discover -s tests",
+    "",
+  ].join("\n"), "utf-8");
+
+  runGitCommand(projectDir, ["init"]);
+  runGitCommand(projectDir, ["config", "user.email", "release-e2e@forgeagent.local"]);
+  runGitCommand(projectDir, ["config", "user.name", "ForgeAgent Release E2E"]);
+  runGitCommand(projectDir, ["add", "."]);
+  runGitCommand(projectDir, ["commit", "-m", "initial failing Python fixture"]);
+  return { projectDir, targetPath, testPath };
+}
+
+async function scenarioAgentPythonCodeIndex(ctx: ReleaseContext): Promise<{ detail: string; diagnostics: Record<string, unknown> }> {
+  const { projectDir, targetPath, testPath } = preparePythonCodeIndexWorkspace(ctx);
+  const project = ctx.api.createProject({
+    name: "Release Python Code Index Workspace",
+    path: projectDir,
+    create: true,
+    trustState: "trusted",
+  });
+  const session = ctx.api.createSession(`${RUN_ID} agent python code index`, { projectId: project.id });
+  ctx.autoResponses.set(session.id, "allow_once");
+  ctx.api.appendUserMessage(
+    session.id,
+    [
+      "This is a ForgeAgent release gate for non-TypeScript coding navigation. Work only inside the current workspace.",
+      "The Python tests fail because src/pricing.py PriceCalculator.subtotal returns a comma-joined string instead of the numeric sum.",
+      "You must call lsp_query to navigate this Python workspace, using the generic multi-language code index if TypeScript LSP is not available.",
+      "Use read_file to inspect the relevant Python source and test files, then edit_file, multi_edit_file, or apply_patch_file for a bounded edit.",
+      "Do not use write_file to overwrite files, and do not use bash/perl/sed/python/node to edit source files.",
+      "Run verify_workspace to execute the safe workspace test command, then call git_diff before your final answer.",
+      "When tests pass, answer with the prefix PYTHON_CODE_INDEX_OK and mention src/pricing.py.",
+    ].join(" "),
+    { source: DEVICE_SOURCE },
+  );
+  await waitForSessionStatus(ctx.api, session.id, ["idle"]);
+  const events = ctx.api.getThread(session.id);
+  assertToolPairs(events);
+  const thread = threadTypes(events);
+  const toolCalls = events.filter((event) => event.type === "tool_call");
+  const called = (toolName: string) => toolCalls.some((event) => event.toolName === toolName);
+  assert(called("lsp_query"), `Agent did not use lsp_query generic navigation. Thread=${thread}`);
+  assert(events.some((event) => (
+    event.type === "tool_result" &&
+    event.toolName === "lsp_query" &&
+    /generic (?:lexical )?code index|Generic code index/i.test(String(event.result))
+  )), `lsp_query did not expose generic code index output. Thread=${thread}`);
+  assert(called("read_file"), `Agent did not inspect Python files. Thread=${thread}`);
+  assert(called("edit_file") || called("multi_edit_file") || called("apply_patch_file"), `Agent did not use bounded edit tools. Thread=${thread}`);
+  assert(!called("write_file"), `Agent used write_file instead of bounded edits. Thread=${thread}`);
+  assert(!events.some((event) => (
+    event.type === "tool_call" &&
+    event.toolName === "bash" &&
+    /\b(?:sed|perl|python|python3|node)\b/.test(String(event.args.command ?? "")) &&
+    !/\bpython3?\s+-m\s+unittest\b/.test(String(event.args.command ?? ""))
+  )), `Agent edited through shell/runtime command instead of ForgeAgent edit tools. Thread=${thread}`);
+  assert(called("verify_workspace"), `Agent did not run verify_workspace. Thread=${thread}`);
+  assert(called("git_diff"), `Agent did not review git diff. Thread=${thread}`);
+
+  const source = readFileSync(targetPath, "utf-8");
+  assert(!source.includes(".join("), `Python source still returns joined string:\n${source}`);
+  assert(/sum\s*\(/.test(source) || /\+=/.test(source), `Python source does not compute a numeric sum:\n${source}`);
+  execFileSync("python3", ["-m", "unittest", "discover", "-s", "tests"], {
+    cwd: projectDir,
+    stdio: "pipe",
+    timeout: 120_000,
+    env: process.env,
+  });
+
+  const checks = ctx.api.getVerificationResults(session.id);
+  assert(hasPassedWorkspaceTest(checks), `No passed Python workspace test recorded: ${JSON.stringify(checks, null, 2)}`);
+  const diffs = ctx.api.getSessionDiffs(session.id);
+  assert(diffs.some((diff) => diff.filePath === targetPath), `No structured diff was recorded for ${targetPath}. Diffs=${JSON.stringify(diffs, null, 2)}`);
+  const answer = lastAssistantText(events);
+  assert(answer.includes("PYTHON_CODE_INDEX_OK"), `Agent did not produce Python code index success marker: ${answer}`);
+  ctx.autoResponses.delete(session.id);
+  return {
+    detail: `pythonFile=${targetPath}; test=${testPath}; checks=${checks.length}; diffs=${diffs.length}; tools=${toolCalls.map((event) => event.toolName).join(",")}`,
+    diagnostics: {
+      projectDir,
+      changedFiles: [targetPath],
+      activity: ctx.api.getWorkspaceActivity(session.id),
+    },
+  };
+}
+
+function prepareMultiFileRefactorWorkspace(ctx: ReleaseContext): {
+  projectDir: string;
+  definitionPath: string;
+  renderPath: string;
+  auditPath: string;
+} {
+  const projectDir = join(ctx.workspaceDir, "coding-agent-multifile-refactor");
+  rmSync(projectDir, { recursive: true, force: true });
+  mkdirSync(join(projectDir, "src"), { recursive: true });
+  writeFileSync(join(projectDir, "package.json"), JSON.stringify({
+    name: "forgeagent-release-multifile-refactor",
+    private: true,
+    type: "module",
+    scripts: {
+      typecheck: "tsc --noEmit --pretty false",
+    },
+    devDependencies: {
+      typescript: "^5.8.0",
+    },
+  }, null, 2), "utf-8");
+  writeFileSync(join(projectDir, "tsconfig.json"), JSON.stringify({
+    compilerOptions: {
+      strict: true,
+      noEmit: true,
+      target: "ES2022",
+      module: "ESNext",
+      moduleResolution: "Bundler",
+      types: [],
+    },
+    include: ["src/**/*.ts"],
+  }, null, 2), "utf-8");
+  const definitionPath = join(projectDir, "src", "labels.ts");
+  const renderPath = join(projectDir, "src", "render.ts");
+  const auditPath = join(projectDir, "src", "audit.ts");
+  writeFileSync(definitionPath, [
+    "export type User = {",
+    "  id: string;",
+    "  firstName: string;",
+    "  lastName: string;",
+    "  active: boolean;",
+    "};",
+    "",
+    "export function formatUserLabel(user: User): string {",
+    "  return `${user.firstName} ${user.lastName}`.trim();",
+    "}",
+    "",
+  ].join("\n"), "utf-8");
+  writeFileSync(renderPath, [
+    "import { formatUserLabel, type User } from \"./labels.js\";",
+    "",
+    "export function renderUserCard(user: User): string {",
+    "  const label = formatUserLabel(user);",
+    "  return `${label} (${user.id})`;",
+    "}",
+    "",
+  ].join("\n"), "utf-8");
+  writeFileSync(auditPath, [
+    "import { formatUserLabel, type User } from \"./labels.js\";",
+    "",
+    "export function auditUserLabel(user: User): string {",
+    "  return `audit:${formatUserLabel(user)}`;",
+    "}",
+    "",
+  ].join("\n"), "utf-8");
+  writeFileSync(join(projectDir, "src", "index.ts"), [
+    "import { auditUserLabel } from \"./audit.js\";",
+    "import { renderUserCard } from \"./render.js\";",
+    "",
+    "const user = { id: \"u_1\", firstName: \"Ada\", lastName: \"Lovelace\", active: true };",
+    "console.log(renderUserCard(user));",
+    "console.log(auditUserLabel(user));",
+    "",
+  ].join("\n"), "utf-8");
+
+  runGitCommand(projectDir, ["init"]);
+  runGitCommand(projectDir, ["config", "user.email", "release-e2e@forgeagent.local"]);
+  runGitCommand(projectDir, ["config", "user.name", "ForgeAgent Release E2E"]);
+  runGitCommand(projectDir, ["add", "."]);
+  runGitCommand(projectDir, ["commit", "-m", "initial multi-file refactor fixture"]);
+  return { projectDir, definitionPath, renderPath, auditPath };
+}
+
+async function scenarioAgentMultiFileRefactor(ctx: ReleaseContext): Promise<{ detail: string; diagnostics: Record<string, unknown> }> {
+  const { projectDir, definitionPath, renderPath, auditPath } = prepareMultiFileRefactorWorkspace(ctx);
+  const project = ctx.api.createProject({
+    name: "Release Multi-file Refactor Workspace",
+    path: projectDir,
+    create: true,
+    trustState: "trusted",
+  });
+  const session = ctx.api.createSession(`${RUN_ID} agent multi-file refactor`, { projectId: project.id });
+  ctx.autoResponses.set(session.id, "allow_once");
+  ctx.api.appendUserMessage(
+    session.id,
+    [
+      "This is a ForgeAgent release gate for multi-file coding refactor ability. Work only inside the current workspace.",
+      "Rename the exported TypeScript symbol formatUserLabel to formatDisplayName across the project.",
+      "You must call lsp_query with query=references and symbol=formatUserLabel before editing.",
+      "Use read_file on the referenced source files, then edit_file, multi_edit_file, or apply_patch_file for bounded edits.",
+      "Do not use write_file to overwrite files, and do not use bash/perl/sed/python/node to edit source files.",
+      "Run verify_workspace to verify, then call git_diff before your final answer. Use bash for verification only if verify_workspace reports that no safe check can be detected.",
+      "When the refactor is complete, answer with the prefix CODING_REFACTOR_OK and mention every changed file.",
+    ].join(" "),
+    { source: DEVICE_SOURCE },
+  );
+  await waitForSessionStatus(ctx.api, session.id, ["idle"]);
+  const events = ctx.api.getThread(session.id);
+  assertToolPairs(events);
+  const thread = threadTypes(events);
+  const toolCalls = events.filter((event) => event.type === "tool_call");
+  const called = (toolName: string) => toolCalls.some((event) => event.toolName === toolName);
+  assert(events.some((event) => (
+    event.type === "tool_call" &&
+    event.toolName === "lsp_query" &&
+    event.args.query === "references" &&
+    event.args.symbol === "formatUserLabel"
+  )), `Agent did not use LSP references before refactor. Thread=${thread}`);
+  assert(called("read_file"), `Agent did not read referenced files. Thread=${thread}`);
+  assert(called("edit_file") || called("multi_edit_file") || called("apply_patch_file"), `Agent did not use bounded edit tools. Thread=${thread}`);
+  assert(!called("write_file"), `Agent used write_file instead of bounded edits. Thread=${thread}`);
+  assert(!events.some((event) => (
+    event.type === "tool_call" &&
+    event.toolName === "bash" &&
+    /\b(?:sed|perl|python|node)\b/.test(String(event.args.command ?? ""))
+  )), `Agent edited through shell/runtime command instead of ForgeAgent edit tools. Thread=${thread}`);
+  assert(hasTypeScriptVerificationEvidence(events), `Agent did not run TypeScript verification. Thread=${thread}`);
+  assert(!events.some((event) => (
+    event.type === "permission_request" &&
+    event.toolName === "bash" &&
+    event.subject.includes("tsc")
+  )), "Safe TypeScript verification unexpectedly requested user approval.");
+  assert(called("git_diff"), `Agent did not review git diff. Thread=${thread}`);
+
+  const refactoredFiles = [definitionPath, renderPath, auditPath];
+  for (const filePath of refactoredFiles) {
+    const source = readFileSync(filePath, "utf-8");
+    assert(source.includes("formatDisplayName"), `Missing renamed symbol in ${filePath}:\n${source}`);
+    assert(!source.includes("formatUserLabel"), `Old symbol remains in ${filePath}:\n${source}`);
+  }
+  execFileSync("npx", ["tsc", "--noEmit", "--pretty", "false"], {
+    cwd: projectDir,
+    stdio: "pipe",
+    timeout: 120_000,
+    env: process.env,
+  });
+
+  const diagnostics = ctx.api.getDiagnostics(session.id);
+  assert(diagnostics.filter((diagnostic) => diagnostic.severity === "error").length === 0, `Diagnostics still contain errors: ${JSON.stringify(diagnostics, null, 2)}`);
+  const checks = ctx.api.getVerificationResults(session.id);
+  assert(hasPassedTypeScriptVerification(checks), `No passed TypeScript verification recorded: ${JSON.stringify(checks, null, 2)}`);
+  const diffs = ctx.api.getSessionDiffs(session.id);
+  const changed = new Set(diffs.map((diff) => diff.filePath));
+  for (const filePath of refactoredFiles) {
+    assert(changed.has(filePath), `No structured diff recorded for ${filePath}. Diffs=${JSON.stringify(diffs, null, 2)}`);
+  }
+  const answer = lastAssistantText(events);
+  assert(answer.includes("CODING_REFACTOR_OK"), `Agent did not produce refactor success marker: ${answer}`);
+  ctx.autoResponses.delete(session.id);
+  return {
+    detail: `refactored=${refactoredFiles.length}; checks=${checks.length}; diffs=${diffs.length}; tools=${toolCalls.map((event) => event.toolName).join(",")}`,
+    diagnostics: {
+      projectDir,
+      changedFiles: refactoredFiles,
+      activity: ctx.api.getWorkspaceActivity(session.id),
+    },
+  };
+}
+
+function prepareFrontendWorkspace(ctx: ReleaseContext): {
+  projectDir: string;
+  indexPath: string;
+  stylePath: string;
+  mainPath: string;
+} {
+  const projectDir = join(ctx.workspaceDir, "coding-agent-frontend-workspace");
+  rmSync(projectDir, { recursive: true, force: true });
+  mkdirSync(join(projectDir, "src"), { recursive: true });
+  writeFileSync(join(projectDir, "package.json"), JSON.stringify({
+    name: "forgeagent-release-frontend-workspace",
+    private: true,
+    type: "module",
+    scripts: {
+      typecheck: "tsc --noEmit --pretty false",
+    },
+    devDependencies: {
+      typescript: "^5.8.0",
+    },
+  }, null, 2), "utf-8");
+  writeFileSync(join(projectDir, "tsconfig.json"), JSON.stringify({
+    compilerOptions: {
+      strict: true,
+      noEmit: true,
+      target: "ES2022",
+      module: "ESNext",
+      moduleResolution: "Bundler",
+      lib: ["ES2022", "DOM"],
+      types: [],
+    },
+    include: ["src/**/*.ts"],
+  }, null, 2), "utf-8");
+  const indexPath = join(projectDir, "index.html");
+  const stylePath = join(projectDir, "src", "styles.css");
+  const mainPath = join(projectDir, "src", "main.ts");
+  writeFileSync(indexPath, [
+    "<!doctype html>",
+    "<html lang=\"en\">",
+    "  <head>",
+    "    <meta charset=\"UTF-8\" />",
+    "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />",
+    "    <title>ForgeAgent Frontend Fixture</title>",
+    "    <link rel=\"stylesheet\" href=\"./src/styles.css\" />",
+    "  </head>",
+    "  <body>",
+    "    <main class=\"console-card\">",
+    "      <p class=\"eyebrow\">Local agent workspace</p>",
+    "      <h1 id=\"console-title\">ForgeAgent Setup</h1>",
+    "      <p id=\"console-copy\">Waiting for setup.</p>",
+    "      <span id=\"status-pill\" class=\"status-pill\" data-state=\"offline\">Offline</span>",
+    "      <button id=\"primary-action\" type=\"button\">Start</button>",
+    "    </main>",
+    "    <script type=\"module\" src=\"./src/main.ts\"></script>",
+    "  </body>",
+    "</html>",
+    "",
+  ].join("\n"), "utf-8");
+  writeFileSync(stylePath, [
+    ":root {",
+    "  color: #37352f;",
+    "  background: #fbfbfa;",
+    "  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;",
+    "}",
+    "",
+    "body {",
+    "  min-height: 100vh;",
+    "  margin: 0;",
+    "  display: grid;",
+    "  place-items: center;",
+    "}",
+    "",
+    ".console-card {",
+    "  width: min(560px, calc(100vw - 48px));",
+    "  border: 1px solid #dedbd5;",
+    "  padding: 32px;",
+    "  background: #ffffff;",
+    "}",
+    "",
+    ".eyebrow {",
+    "  color: #787774;",
+    "  text-transform: uppercase;",
+    "  letter-spacing: 0.08em;",
+    "}",
+    "",
+    ".status-pill {",
+    "  display: inline-flex;",
+    "  align-items: center;",
+    "  border: 1px solid #d0ccc3;",
+    "  padding: 6px 10px;",
+    "  color: #787774;",
+    "}",
+    "",
+  ].join("\n"), "utf-8");
+  writeFileSync(mainPath, [
+    "type ConsoleState = \"offline\" | \"online\";",
+    "",
+    "const status = document.querySelector<HTMLSpanElement>(\"#status-pill\");",
+    "const button = document.querySelector<HTMLButtonElement>(\"#primary-action\");",
+    "",
+    "export function setConsoleState(next: ConsoleState): void {",
+    "  if (!status || !button) return;",
+    "  status.dataset.state = next;",
+    "  status.textContent = next === \"online\" ? \"Online\" : \"Offline\";",
+    "  button.textContent = next === \"online\" ? \"Open workspace\" : \"Start\";",
+    "}",
+    "",
+    "setConsoleState(\"offline\");",
+    "",
+  ].join("\n"), "utf-8");
+
+  runGitCommand(projectDir, ["init"]);
+  runGitCommand(projectDir, ["config", "user.email", "release-e2e@forgeagent.local"]);
+  runGitCommand(projectDir, ["config", "user.name", "ForgeAgent Release E2E"]);
+  runGitCommand(projectDir, ["add", "."]);
+  runGitCommand(projectDir, ["commit", "-m", "initial frontend fixture"]);
+  return { projectDir, indexPath, stylePath, mainPath };
+}
+
+function serveStaticWorkspace(root: string): Promise<{ server: http.Server; url: string }> {
+  const server = http.createServer((req, res) => {
+    const pathname = decodeURIComponent(new URL(req.url ?? "/", "http://127.0.0.1").pathname);
+    const relativePath = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+    const fullPath = resolve(root, relativePath);
+    if (!fullPath.startsWith(resolve(root))) {
+      res.writeHead(403);
+      res.end("Forbidden");
+      return;
+    }
+    if (!existsSync(fullPath)) {
+      res.writeHead(404);
+      res.end("Not found");
+      return;
+    }
+    const type = fullPath.endsWith(".css")
+      ? "text/css"
+      : fullPath.endsWith(".ts")
+        ? "text/javascript"
+        : "text/html";
+    res.writeHead(200, { "Content-Type": `${type}; charset=utf-8` });
+    res.end(readFileSync(fullPath));
+  });
+  return new Promise((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address !== "object") {
+        server.close();
+        reject(new Error("Could not allocate frontend static server port."));
+        return;
+      }
+      resolvePromise({ server, url: `http://127.0.0.1:${address.port}` });
+    });
+  });
+}
+
+async function scenarioAgentFrontendWorkspace(ctx: ReleaseContext): Promise<{ detail: string; diagnostics: Record<string, unknown> }> {
+  const { projectDir, indexPath, stylePath, mainPath } = prepareFrontendWorkspace(ctx);
+  const project = ctx.api.createProject({
+    name: "Release Frontend Workspace",
+    path: projectDir,
+    create: true,
+    trustState: "trusted",
+  });
+  const session = ctx.api.createSession(`${RUN_ID} agent frontend workspace`, { projectId: project.id });
+  ctx.autoResponses.set(session.id, "allow_once");
+  ctx.api.appendUserMessage(
+    session.id,
+    [
+      "This is a ForgeAgent release gate for frontend coding ability. Work only inside the current workspace.",
+      "Update the local console UI so that the visible h1 element with id=\"console-title\" shows exactly 'ForgeAgent Console Ready',",
+      "the paragraph with id=\"console-copy\" keeps that id and says 'Your local DeepSeek workspace is connected and ready.',",
+      "and the status pill starts as Online with data-state=\"online\".",
+      "Update src/main.ts so setConsoleState initializes the page online by default, and update src/styles.css so the online status pill is green (#1f7a4d) with a light green background (#edf7f1).",
+      "Use todo_write, read_file, bounded edit tools, verify_workspace, and git_diff. Use bash for verification only if verify_workspace reports that no safe check can be detected.",
+      "Do not use write_file to overwrite files, and do not use bash/perl/sed/python/node to edit source files.",
+      "When done, answer with exactly the prefix FRONTEND_AGENT_OK and mention index.html, src/main.ts, and src/styles.css.",
+    ].join(" "),
+    { source: DEVICE_SOURCE },
+  );
+  await waitForSessionStatus(ctx.api, session.id, ["idle"]);
+  const events = ctx.api.getThread(session.id);
+  assertToolPairs(events);
+  const thread = threadTypes(events);
+  const toolCalls = events.filter((event) => event.type === "tool_call");
+  const called = (toolName: string) => toolCalls.some((event) => event.toolName === toolName);
+  assert(called("todo_write"), `Agent did not record frontend plan. Thread=${thread}`);
+  assert(called("read_file"), `Agent did not inspect frontend files. Thread=${thread}`);
+  assert(called("edit_file") || called("multi_edit_file") || called("apply_patch_file"), `Agent did not use bounded edit tools. Thread=${thread}`);
+  const successfulWriteFiles = successfulToolUseIds(events, "write_file");
+  assert(successfulWriteFiles.length === 0, `Agent successfully used write_file instead of bounded edits: ${successfulWriteFiles.join(", ")}. Thread=${thread}`);
+  assert(!events.some((event) => (
+    event.type === "tool_call" &&
+    event.toolName === "bash" &&
+    /\b(?:sed|perl|python|node)\b/.test(String(event.args.command ?? ""))
+  )), `Agent edited through shell/runtime command instead of ForgeAgent edit tools. Thread=${thread}`);
+  assert(hasTypeScriptVerificationEvidence(events), `Agent did not run TypeScript verification. Thread=${thread}`);
+  assert(!events.some((event) => (
+    event.type === "permission_request" &&
+    event.toolName === "bash" &&
+    event.subject.includes("tsc")
+  )), "Safe frontend TypeScript verification unexpectedly requested user approval.");
+  assert(called("git_diff"), `Agent did not review frontend git diff. Thread=${thread}`);
+
+  const html = readFileSync(indexPath, "utf-8");
+  const css = readFileSync(stylePath, "utf-8");
+  const main = readFileSync(mainPath, "utf-8");
+  assert(/<h1\s+id="console-title">ForgeAgent Console Ready<\/h1>/.test(html), `Visible HTML h1 was not updated:\n${html}`);
+  assert(/<p\s+id="console-copy">Your local DeepSeek workspace is connected and ready\.<\/p>/.test(html), `Visible HTML copy id/text was not preserved:\n${html}`);
+  assert(html.includes("Your local DeepSeek workspace is connected and ready."), `HTML copy was not updated:\n${html}`);
+  assert(html.includes("data-state=\"online\""), `HTML status state was not set online:\n${html}`);
+  assert(main.includes("setConsoleState(\"online\")"), `main.ts does not initialize online:\n${main}`);
+  assert(css.includes("#1f7a4d") && css.includes("#edf7f1"), `CSS online status colors missing:\n${css}`);
+  execFileSync("npx", ["tsc", "--noEmit", "--pretty", "false"], {
+    cwd: projectDir,
+    stdio: "pipe",
+    timeout: 120_000,
+    env: process.env,
+  });
+
+  const staticServer = await serveStaticWorkspace(projectDir);
+  const browser = await playwrightChromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await page.goto(staticServer.url, { waitUntil: "networkidle" });
+    await page.waitForSelector("#status-pill[data-state='online']");
+    const title = await page.locator("#console-title").innerText();
+    const copy = await page.locator("#console-copy").innerText();
+    const statusText = await page.locator("#status-pill").innerText();
+    const styles = await page.locator("#status-pill").evaluate((element) => {
+      const computed = getComputedStyle(element);
+      return {
+        color: computed.color,
+        backgroundColor: computed.backgroundColor,
+      };
+    });
+    assert(title === "ForgeAgent Console Ready", `Rendered title mismatch: ${title}`);
+    assert(copy === "Your local DeepSeek workspace is connected and ready.", `Rendered copy mismatch: ${copy}`);
+    assert(statusText === "Online", `Rendered status mismatch: ${statusText}`);
+    assert(styles.color === "rgb(31, 122, 77)", `Rendered online color mismatch: ${JSON.stringify(styles)}`);
+    assert(styles.backgroundColor === "rgb(237, 247, 241)", `Rendered online background mismatch: ${JSON.stringify(styles)}`);
+  } finally {
+    await browser.close().catch(() => undefined);
+    await stopPageServer(staticServer.server);
+  }
+
+  const checks = ctx.api.getVerificationResults(session.id);
+  const diffs = ctx.api.getSessionDiffs(session.id);
+  for (const filePath of [indexPath, stylePath, mainPath]) {
+    assert(diffs.some((diff) => diff.filePath === filePath), `No structured diff recorded for ${filePath}. Diffs=${JSON.stringify(diffs, null, 2)}`);
+  }
+  const answer = lastAssistantText(events);
+  assert(answer.includes("FRONTEND_AGENT_OK"), `Agent did not produce frontend success marker: ${answer}`);
+  ctx.autoResponses.delete(session.id);
+  return {
+    detail: `frontendFiles=3; checks=${checks.length}; diffs=${diffs.length}; tools=${toolCalls.map((event) => event.toolName).join(",")}`,
+    diagnostics: {
+      projectDir,
+      changedFiles: [indexPath, stylePath, mainPath],
+      activity: ctx.api.getWorkspaceActivity(session.id),
+    },
+  };
 }
 
 async function scenarioMcpHttpSurface(): Promise<void> {
@@ -1042,6 +1825,10 @@ async function main(): Promise<void> {
       SOAK_BROWSER_DATA_DIR: join(DATA_DIR, "soak-browser"),
       SOAK_PROVIDER: PROVIDER_KIND,
     })],
+    ["agent_coding_workspace", () => scenarioAgentCodingWorkspace(ctx)],
+    ["agent_python_code_index", () => scenarioAgentPythonCodeIndex(ctx)],
+    ["agent_multifile_refactor", () => scenarioAgentMultiFileRefactor(ctx)],
+    ["agent_frontend_workspace", () => scenarioAgentFrontendWorkspace(ctx)],
     ["real_mcp_external", () => scenarioRealMcp(ctx)],
     ["real_forgewebridge_extension", () => scenarioRealWebridge()],
   ];

@@ -16,6 +16,14 @@ function primeReadState(filePath: string): void {
   readFileState.set(filePath, { content, mtimeMs: mtime });
 }
 
+function outputOf(result: unknown): string {
+  return String((result as { output?: unknown }).output ?? result);
+}
+
+function expectToolError(result: unknown): void {
+  expect((result as { isError?: unknown }).isError).toBe(true);
+}
+
 beforeEach(() => {
   readFileState.clear();
   if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
@@ -56,7 +64,8 @@ describe("edit_file", () => {
       { file_path: tmpPath("noop.txt"), old_string: "test", new_string: "test" },
       "s1",
     );
-    expect(result).toContain("No changes to make");
+    expectToolError(result);
+    expect(outputOf(result)).toContain("No changes to make");
   });
 
   it("fails when old_string is empty and file exists", async () => {
@@ -66,7 +75,8 @@ describe("edit_file", () => {
       { file_path: tmpPath("exists.txt"), old_string: "", new_string: "new" },
       "s1",
     );
-    expect(result).toContain("Cannot create new file");
+    expectToolError(result);
+    expect(outputOf(result)).toContain("Cannot create new file");
   });
 
   it("fails when file does not exist", async () => {
@@ -74,7 +84,8 @@ describe("edit_file", () => {
       { file_path: tmpPath("missing.txt"), old_string: "a", new_string: "b" },
       "s1",
     );
-    expect(result).toContain("File does not exist");
+    expectToolError(result);
+    expect(outputOf(result)).toContain("File does not exist");
   });
 
   it("fails when file has not been read first", async () => {
@@ -83,7 +94,8 @@ describe("edit_file", () => {
       { file_path: tmpPath("unread.txt"), old_string: "content", new_string: "new" },
       "s1",
     );
-    expect(result).toContain("File has not been read yet");
+    expectToolError(result);
+    expect(outputOf(result)).toContain("File has not been read yet");
   });
 
   it("fails when file was modified since read", async () => {
@@ -95,7 +107,8 @@ describe("edit_file", () => {
       { file_path: tmpPath("stale.txt"), old_string: "original", new_string: "new" },
       "s1",
     );
-    expect(result).toContain("File has been modified since read");
+    expectToolError(result);
+    expect(outputOf(result)).toContain("File has been modified since read");
   });
 
   it("fails when old_string is not found", async () => {
@@ -105,7 +118,8 @@ describe("edit_file", () => {
       { file_path: tmpPath("nomatch.txt"), old_string: "delta", new_string: "epsilon" },
       "s1",
     );
-    expect(result).toContain("String to replace not found in file");
+    expectToolError(result);
+    expect(outputOf(result)).toContain("String to replace not found in file");
   });
 
   it("fails when multiple matches and replace_all is false", async () => {
@@ -115,11 +129,12 @@ describe("edit_file", () => {
       { file_path: tmpPath("multi.txt"), old_string: "foo", new_string: "qux" },
       "s1",
     );
-    expect(result).toContain("Found 3 matches");
-    expect(result).toContain("replace_all");
+    expectToolError(result);
+    expect(outputOf(result)).toContain("Found 3 matches");
+    expect(outputOf(result)).toContain("replace_all");
   });
 
-  it("strips trailing whitespace in non-markdown files", async () => {
+  it("preserves trailing whitespace in non-markdown files", async () => {
     writeFileSync(tmpPath("code.ts"), "const x = 1;\nconst y = 2;");
     primeReadState(tmpPath("code.ts"));
     const result = await editFileTool.handler(
@@ -127,7 +142,7 @@ describe("edit_file", () => {
       "s1",
     );
     expect(result).toContain("File edited");
-    expect(readFileSync(tmpPath("code.ts"), "utf-8")).toBe("const x = 1;\nconst z = 3;");
+    expect(readFileSync(tmpPath("code.ts"), "utf-8")).toBe("const x = 1;\nconst z = 3;   ");
   });
 
   it("preserves trailing whitespace in markdown files", async () => {
@@ -152,6 +167,22 @@ describe("edit_file", () => {
     expect(readFileSync(tmpPath("regex.txt"), "utf-8")).toBe("REPLACED[d]e(f)g");
   });
 
+  it("preserves the file's curly quote style when matching normalized quotes", async () => {
+    writeFileSync(tmpPath("quotes.md"), "Title: “old label” and ‘old note’");
+    primeReadState(tmpPath("quotes.md"));
+    const result = await editFileTool.handler(
+      {
+        file_path: tmpPath("quotes.md"),
+        old_string: "\"old label\" and 'old note'",
+        new_string: "\"new label\" and 'new note'",
+      },
+      "s1",
+    );
+
+    expect(result).toContain("File edited");
+    expect(readFileSync(tmpPath("quotes.md"), "utf-8")).toBe("Title: “new label” and ‘new note’");
+  });
+
   it("fails gracefully for ipynb files", async () => {
     writeFileSync(tmpPath("notebook.ipynb"), '{"cells": []}');
     primeReadState(tmpPath("notebook.ipynb"));
@@ -159,6 +190,7 @@ describe("edit_file", () => {
       { file_path: tmpPath("notebook.ipynb"), old_string: "cells", new_string: "items" },
       "s1",
     );
-    expect(result).toContain("NotebookEdit");
+    expectToolError(result);
+    expect(outputOf(result)).toContain("NotebookEdit");
   });
 });

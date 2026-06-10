@@ -10,6 +10,14 @@ function tmpPath(name: string): string {
   return resolve(tmpDir, name);
 }
 
+function outputOf(result: unknown): string {
+  return String((result as { output?: unknown }).output ?? result);
+}
+
+function expectToolError(result: unknown): void {
+  expect((result as { isError?: unknown }).isError).toBe(true);
+}
+
 beforeEach(() => {
   readFileState.clear();
   if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
@@ -53,7 +61,8 @@ describe("write_file", () => {
       { file_path: tmpPath("unread.txt"), content: "new" },
       "s1",
     );
-    expect(result).toContain("File has not been read yet");
+    expectToolError(result);
+    expect(outputOf(result)).toContain("File has not been read yet");
   });
 
   it("rejects write when file modified since read", async () => {
@@ -67,7 +76,8 @@ describe("write_file", () => {
       { file_path: tmpPath("stale.txt"), content: "version 3" },
       "s1",
     );
-    expect(result).toContain("File has been modified since read");
+    expectToolError(result);
+    expect(outputOf(result)).toContain("File has been modified since read");
   });
 
   it("creates parent directories automatically", async () => {

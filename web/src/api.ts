@@ -20,6 +20,7 @@ import type {
   SetupStatus,
   TerminalSession,
   UploadedSessionFile,
+  WorkspaceActivityState,
 } from "./types";
 
 const TOKEN_KEY = "forgeagent.web.token";
@@ -152,6 +153,15 @@ export const api = {
     return apiFetch<SessionEvent[]>(`/sessions/${sessionId}/thread?${params.toString()}`);
   },
   usage: (sessionId: string) => apiFetch<SessionUsageSummary>(`/sessions/${sessionId}/usage`),
+  activity: (sessionId: string, branchId?: string) =>
+    apiFetch<WorkspaceActivityState>(`/sessions/${sessionId}/activity${branchId ? `?branchId=${encodeURIComponent(branchId)}` : ""}`),
+  createPermissionGrant: (input: { sessionId: string; grantKind: string; scope?: "session" | "project" | "branch"; branchId?: string; expiresAt?: string }) =>
+    apiFetch<Record<string, unknown>>("/permission-grants", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  revokePermissionGrant: (grantId: string) =>
+    apiFetch<Record<string, unknown>>(`/permission-grants/${encodeURIComponent(grantId)}`, { method: "DELETE" }),
   sendMessage: (sessionId: string, text: string, branchId?: string) => apiFetch<Session>(`/sessions/${sessionId}/messages`, {
     method: "POST",
     body: JSON.stringify({ text, ...(branchId ? { branchId } : {}) }),

@@ -54,6 +54,11 @@ describe("Core skill usage events", () => {
 
     expect(api.getSkill("report-helper")?.status).toBe("active");
 
+    const streamed: string[] = [];
+    api.onSessionEvent((_sessionId, event) => {
+      if (event.type === "skill_used") streamed.push(event.skillName);
+    });
+
     const session = api.createSession("skill use");
     api.appendUserMessage(session.id, "Use the report helper", { dispatch: false });
     await api.runTurn(session.id);
@@ -66,5 +71,6 @@ describe("Core skill usage events", () => {
       expect(skillUsed.filePath).toBe(skillPath);
       expect(skillUsed.message).toContain("report-helper");
     }
+    expect(streamed).toContain("report-helper");
   });
 });

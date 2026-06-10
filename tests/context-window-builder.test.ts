@@ -34,6 +34,11 @@ describe("ContextWindowBuilder", () => {
     expect(msgs[0]!.role).toBe("assistant");
     expect(msgs[0]!.content).toBe("");
     expect(msgs[0]!.tool_calls).toEqual([{ id: "call_3", name: "read_file", args: { path: "/tmp" } }]);
+    expect(msgs[1]).toMatchObject({
+      role: "tool",
+      tool_call_id: "call_3",
+    });
+    expect(msgs[1]!.content).toContain("Tool result missing from durable thread");
   });
 
   it("maps tool_result to tool role", () => {
@@ -117,6 +122,43 @@ describe("ContextWindowBuilder", () => {
     });
     expect(msgs[2]!.role).toBe("system");
     expect(msgs[2]!.content).toContain("Runtime chrome attached");
+  });
+
+  it("compacts old large tool results while preserving recent tool results", () => {
+    const oldLarge = "old-output-".repeat(2_000);
+    const recentLarge = "recent-output-".repeat(2_000);
+    const events: ToolResult[] = [
+      {
+        type: "tool_result",
+        seq: 10,
+        timestamp: ts,
+        sessionId: sid,
+        toolName: "bash",
+        result: oldLarge,
+        isError: false,
+        toolUseId: "old",
+      },
+      {
+        type: "tool_result",
+        seq: 11,
+        timestamp: ts,
+        sessionId: sid,
+        toolName: "read_file",
+        result: recentLarge,
+        isError: false,
+        toolUseId: "recent",
+      },
+    ];
+
+    const msgs = buildContext(events, {
+      maxToolResultChars: 1_200,
+      preserveRecentToolResults: 1,
+    });
+
+    expect(msgs[0]!.content).toContain("<compacted-tool-result>");
+    expect(msgs[0]!.content).toContain("Original length");
+    expect(msgs[0]!.content.length).toBeLessThan(oldLarge.length);
+    expect(msgs[1]!.content).toBe(recentLarge);
   });
 
   it("does not render local context usage estimates into model context", () => {

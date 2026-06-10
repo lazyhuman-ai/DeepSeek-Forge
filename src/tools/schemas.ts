@@ -35,8 +35,18 @@ export type ToolHandler = (
   sessionId: string,
   context?: {
     signal?: AbortSignal;
+    toolUseId?: string;
+    source?: import("../permissions/tool-policy.js").ToolRequestSource;
+    branchId?: string;
+    toolExecutor?: import("../agent/tool-executor.js").ToolExecutor;
+    toolsProvider?: () => ToolDefinition[];
+    permissionBroker?: import("../permissions/tool-policy.js").PermissionBroker;
+    workspaceActivity?: import("../workspace/activity-manager.js").WorkspaceActivityManager;
+    modelProvider?: import("../agent/model-provider.js").ModelProvider;
     pathSandbox?: import("../sandbox/path-sandbox.js").PathSandbox;
     projectRoot?: string;
+    readFileStateScope?: string;
+    readThread?: (sessionId: string) => import("../streams/event-types.js").SessionEvent[];
     bashSandboxMode?: "disabled" | "best_effort" | "enforce";
   },
 ) => Promise<unknown>;

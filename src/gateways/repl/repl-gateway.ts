@@ -576,6 +576,7 @@ function eventLabel(e: SessionEvent): string {
     case "mcp_elicitation_request": return `${MAG}MCP? ${R}`;
     case "mcp_elicitation_response": return `${MAG}MCP! ${R}`;
     case "artifact_pointer": return `${D}ARTF ${R}`;
+    default: return `${D}EVNT ${R}`;
   }
 }
 
@@ -599,6 +600,7 @@ function eventContent(e: SessionEvent, max: number): string {
     case "mcp_elicitation_request": return `${e.serverName}: ${truncate(e.message, max)}`;
     case "mcp_elicitation_response": return `${e.serverName}: ${truncate(e.message, max)}`;
     case "artifact_pointer": return `${e.artifactId} (${e.mimeType}, ${e.sizeBytes} bytes)`;
+    default: return truncate("message" in e && typeof e.message === "string" ? e.message : e.type, max);
   }
 }
 

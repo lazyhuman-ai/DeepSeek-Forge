@@ -1,60 +1,24 @@
-import { readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExecutableToolDefinition } from "../schemas.js";
 import { buildTool } from "../schemas.js";
-import { readFileState } from "../read-file-state.js";
+import { readFileStateForContext } from "../read-file-state.js";
 import { resolveToolPath, type ToolPathContext } from "./path-helper.js";
+import { buildStructuredDiff } from "../../workspace/diff.js";
+import { readTextFile, writeTextFile } from "../text-file-io.js";
+import { maybeRecordPassiveTypeScriptDiagnostics } from "./passive-diagnostics.js";
+import { buildEditCheckpoint } from "./edit-checkpoint.js";
+import { findActualString, preserveQuoteStyle } from "./edit-string-utils.js";
 
 const MAX_EDIT_FILE_SIZE = 1024 * 1024 * 1024; // 1 GiB
 
-const MARKDOWN_EXTENSIONS = new Set([".md", ".mdx", ".markdown"]);
-
-function normalizeQuotes(text: string): string {
-  return text
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'");
-}
-
-function stripTrailingWhitespace(str: string): string {
-  const lines = str.split(/(\r\n|\n|\r)/);
-  let result = "";
-  for (let i = 0; i < lines.length; i++) {
-    const part = lines[i]!;
-    if (i % 2 === 0) {
-      result += part.replace(/[ \t]+$/gm, "");
-    } else {
-      result += part;
-    }
-  }
-  return result;
-}
-
-function findActualString(
-  fileContent: string,
-  searchString: string,
-): string | null {
-  if (fileContent.includes(searchString)) return searchString;
-
-  const normalizedSearch = normalizeQuotes(searchString);
-  const normalizedFile = normalizeQuotes(fileContent);
-  const searchIndex = normalizedFile.indexOf(normalizedSearch);
-  if (searchIndex !== -1) {
-    return fileContent.substring(
-      searchIndex,
-      searchIndex + searchString.length,
-    );
-  }
-  return null;
-}
-
-function isMarkdown(filePath: string): boolean {
-  const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
-  return MARKDOWN_EXTENSIONS.has(ext);
+function toolError(output: string): { output: string; isError: true } {
+  return { output, isError: true };
 }
 
 async function handler(
   args: Record<string, unknown>,
-  _sessionId: string,
+  sessionId: string,
   context?: ToolPathContext,
 ): Promise<unknown> {
   const resolvedPath = resolveToolPath(args, context, {
@@ -65,18 +29,19 @@ async function handler(
   });
   if (!resolvedPath.ok) return resolvedPath;
   const filePath = resolvedPath.path;
+  const readFileState = readFileStateForContext(context);
   const oldString = args.old_string as string;
   let newString = args.new_string as string;
   const replaceAll = (args.replace_all as boolean) ?? false;
 
   // Error 1: no-op
   if (oldString === newString) {
-    return "No changes to make: old_string and new_string are exactly the same.";
+    return toolError("No changes to make: old_string and new_string are exactly the same.");
   }
 
   // Error 3: create via empty old_string but file exists
   if (!oldString && existsSync(filePath)) {
-    return "Cannot create new file — file already exists. Use write_file to overwrite or edit_file with a non-empty old_string.";
+    return toolError("Cannot create new file — file already exists. Use write_file to overwrite or edit_file with a non-empty old_string.");
   }
 
   // Error 4: file doesn't exist
@@ -101,9 +66,9 @@ async function handler(
         }
       }
       const suggestion = best ? ` Did you mean ${best}?` : "";
-      return `File does not exist: ${filePath}.${suggestion}`;
+      return toolError(`File does not exist: ${filePath}.${suggestion}`);
     } catch {
-      return `File does not exist: ${filePath}.`;
+      return toolError(`File does not exist: ${filePath}.`);
     }
   }
 
@@ -111,7 +76,7 @@ async function handler(
   try {
     const stat = statSync(filePath);
     if (stat.size > MAX_EDIT_FILE_SIZE) {
-      return `File is too large to edit (${stat.size} bytes). Maximum editable file size is 1 GiB.`;
+      return toolError(`File is too large to edit (${stat.size} bytes). Maximum editable file size is 1 GiB.`);
     }
   } catch {
     // stat failed, continue anyway
@@ -120,36 +85,33 @@ async function handler(
   // Error 6: not read yet
   const state = readFileState.get(filePath);
   if (!state || state.isPartialView) {
-    return "File has not been read yet. Read it first before editing.";
+    return toolError("File has not been read yet. Read it first before editing.");
   }
 
   // Error 7: modified since read
-  const fileContent = readFileSync(filePath, "utf-8");
+  const fileText = readTextFile(filePath);
+  const fileContent = fileText.content;
   if (fileContent !== state.content) {
-    return "File has been modified since read, either by the user or by a linter. Read it again before attempting to edit.";
+    return toolError("File has been modified since read, either by the user or by a linter. Read it again before attempting to edit.");
   }
 
   // Error 5: .ipynb
   if (filePath.endsWith(".ipynb")) {
-    return "File is a Jupyter Notebook. Use the NotebookEdit tool to edit .ipynb files.";
+    return toolError("File is a Jupyter Notebook. Use the NotebookEdit tool to edit .ipynb files.");
   }
 
   // Error 8: string not found
   const actualOldString = findActualString(fileContent, oldString);
   if (!actualOldString) {
-    return `String to replace not found in file.\nString: ${oldString}`;
+    return toolError(`String to replace not found in file.\nString: ${oldString}`);
   }
+  newString = preserveQuoteStyle(oldString, actualOldString, newString);
 
   const matches = fileContent.split(actualOldString).length - 1;
 
   // Error 9: multiple matches but replace_all is false
   if (matches > 1 && !replaceAll) {
-    return `Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${oldString}`;
-  }
-
-  // Strip trailing whitespace for non-markdown
-  if (!isMarkdown(filePath)) {
-    newString = stripTrailingWhitespace(newString);
+    return toolError(`Found ${matches} matches of the string to replace, but replace_all is false. To replace all occurrences, set replace_all to true. To replace only one occurrence, please provide more context to uniquely identify the instance.\nString: ${oldString}`);
   }
 
   // Apply the edit
@@ -162,16 +124,36 @@ async function handler(
 
   // Verify edit actually changed something
   if (updatedContent === fileContent) {
-    return "No changes were made to the file.";
+    return toolError("No changes were made to the file.");
   }
 
-  writeFileSync(filePath, updatedContent, "utf-8");
+  writeTextFile(filePath, updatedContent, {
+    encoding: state.encoding ?? fileText.encoding,
+    hadBom: state.hadBom ?? fileText.hadBom,
+    lineEnding: state.lineEnding ?? fileText.lineEnding,
+  });
 
   const newMtime = Math.floor(statSync(filePath).mtimeMs);
   readFileState.set(filePath, {
     content: updatedContent,
     mtimeMs: newMtime,
+    encoding: state.encoding ?? fileText.encoding,
+    hadBom: state.hadBom ?? fileText.hadBom,
+    lineEnding: state.lineEnding ?? fileText.lineEnding,
   });
+
+  context?.workspaceActivity?.recordDiff(
+    sessionId,
+    buildStructuredDiff(filePath, fileContent, updatedContent, "updated"),
+    context.branchId,
+    buildEditCheckpoint({
+      beforeExists: true,
+      beforeContent: fileContent,
+      afterContent: updatedContent,
+      beforeText: fileText,
+    }),
+  );
+  maybeRecordPassiveTypeScriptDiagnostics({ sessionId, filePath, context });
 
   if (replaceAll) {
     return `Successfully replaced ${matches} occurrence(s) of the string in ${filePath}.`;

@@ -26,6 +26,8 @@ const DEFAULT_COMPACTION_KEEP_RECENT_TOKENS = 20_000;
 const DEFAULT_MAX_RESULT_SIZE_CHARS = 50_000;
 const DEFAULT_ARTIFACT_PREVIEW_BYTES = 2_000;
 const DEFAULT_ARTIFACT_PER_TURN_BUDGET_CHARS = 200_000;
+const DEFAULT_CONTEXT_TOOL_RESULT_MAX_CHARS = 24_000;
+const DEFAULT_CONTEXT_PRESERVE_RECENT_TOOL_RESULTS = 8;
 
 type SerializedToolOutput = {
   data: Buffer | string;
@@ -217,6 +219,8 @@ export class AgentLoop {
   #artifactMaxResultSizeChars: number;
   #artifactPreviewBytes: number;
   #artifactPerTurnBudgetChars: number;
+  #contextToolResultMaxChars: number;
+  #contextPreserveRecentToolResults: number;
   #onDelta: ((sessionId: string, delta: AssistantDelta) => void) | undefined;
   #onToolResult: ((event: {
     sessionId: string;
@@ -252,6 +256,8 @@ export class AgentLoop {
       artifactMaxResultSizeChars?: number;
       artifactPreviewBytes?: number;
       artifactPerTurnBudgetChars?: number;
+      contextToolResultMaxChars?: number;
+      contextPreserveRecentToolResults?: number;
       onDelta?: (sessionId: string, delta: AssistantDelta) => void;
       onToolResult?: (event: {
         sessionId: string;
@@ -292,6 +298,10 @@ export class AgentLoop {
       ?? DEFAULT_ARTIFACT_PREVIEW_BYTES;
     this.#artifactPerTurnBudgetChars = options?.artifactPerTurnBudgetChars
       ?? DEFAULT_ARTIFACT_PER_TURN_BUDGET_CHARS;
+    this.#contextToolResultMaxChars = options?.contextToolResultMaxChars
+      ?? DEFAULT_CONTEXT_TOOL_RESULT_MAX_CHARS;
+    this.#contextPreserveRecentToolResults = options?.contextPreserveRecentToolResults
+      ?? DEFAULT_CONTEXT_PRESERVE_RECENT_TOOL_RESULTS;
     this.#onDelta = options?.onDelta;
     this.#onToolResult = options?.onToolResult;
     this.#onRuntimeEvent = options?.onRuntimeEvent;
@@ -308,7 +318,10 @@ export class AgentLoop {
       throwIfAborted(this.#signal);
       this.#refreshTools();
       const events = this.#readThread?.(sessionId) ?? this.#threadStore.getThread(sessionId);
-      const messages = buildContext(events);
+      const messages = buildContext(events, {
+        maxToolResultChars: this.#contextToolResultMaxChars,
+        preserveRecentToolResults: this.#contextPreserveRecentToolResults,
+      });
 
       // Prepend system prompt if provided
       if (this.#systemPrompt) {
@@ -735,7 +748,10 @@ export class AgentLoop {
   }
 
   #appendPostCompactionContextEstimate(sessionId: string): void {
-    const messages = buildContext(this.#readThread?.(sessionId) ?? this.#threadStore.getThread(sessionId));
+    const messages = buildContext(this.#readThread?.(sessionId) ?? this.#threadStore.getThread(sessionId), {
+      maxToolResultChars: this.#contextToolResultMaxChars,
+      preserveRecentToolResults: this.#contextPreserveRecentToolResults,
+    });
     const inputTokens = estimateTokensFromMessages(messages);
     const contextUsedPercent = (inputTokens / this.#maxContextTokens) * 100;
     const event: ContextUsageEvent = {

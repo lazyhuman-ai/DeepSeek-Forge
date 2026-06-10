@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { CoreAPI } from "../src/core/core-api.js";
 import { ToolRegistry } from "../src/tools/tool-registry.js";
+import { enterWorktreeTool } from "../src/tools/built-in/worktree-tools.js";
 import type { ModelProvider, ModelResponse, ModelMessage } from "../src/agent/model-provider.js";
 import type { Session, SessionEvent } from "../src/streams/event-types.js";
 
@@ -396,6 +397,53 @@ describe("CoreAPI", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("uses the active worktree as project root on later turns", async () => {
+    const dataDir = "tests/tmp/core-api-active-worktree";
+    const workspace = join(dataDir, "repo");
+    const worktreePath = join(dataDir, "repo-worktree");
+    const resolvedWorktreePath = resolve(worktreePath);
+    rmSync(dataDir, { recursive: true, force: true });
+    mkdirSync(workspace, { recursive: true });
+    const { execFileSync } = await import("node:child_process");
+    execFileSync("git", ["init"], { cwd: workspace, stdio: "ignore" });
+    execFileSync("git", ["config", "user.email", "forgeagent@example.test"], { cwd: workspace, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "ForgeAgent Test"], { cwd: workspace, stdio: "ignore" });
+    writeFileSync(join(workspace, "README.md"), "hello\n");
+    execFileSync("git", ["add", "README.md"], { cwd: workspace, stdio: "ignore" });
+    execFileSync("git", ["commit", "-m", "initial"], { cwd: workspace, stdio: "ignore" });
+
+    const registry = new ToolRegistry();
+    registry.register(enterWorktreeTool);
+    let seenProjectRoot = "";
+    registry.register({
+      name: "whereami",
+      description: "Reports current project root",
+      params: {},
+      capabilities: ["fs.read"],
+      handler: async (_args, _sessionId, context) => {
+        seenProjectRoot = context?.projectRoot ?? "";
+        return seenProjectRoot;
+      },
+    });
+    const api2 = new CoreAPI(registry, { dataDir });
+    const project = api2.createProject({ path: workspace, trustState: "trusted" });
+    api2.setModelProvider(mockProvider([
+      { text: "", finishReason: "tool_calls", toolCalls: [{ id: "wt1", name: "enter_worktree", args: { branch: "forge/test", path: worktreePath } }] },
+      { text: "worktree ready", finishReason: "stop" },
+      { text: "", finishReason: "tool_calls", toolCalls: [{ id: "where1", name: "whereami", args: {} }] },
+      { text: "done", finishReason: "stop" },
+    ]));
+
+    const { id } = api2.createSession("worktree root", { projectId: project.id });
+    api2.appendUserMessage(id, "enter worktree", { dispatch: false });
+    await api2.runTurn(id);
+    api2.appendUserMessage(id, "where now", { dispatch: false });
+    await api2.runTurn(id);
+
+    expect(seenProjectRoot).toBe(resolvedWorktreePath);
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("executes a pending tool after permission approval", async () => {
     const registry = new ToolRegistry();
     registry.register({
@@ -678,6 +726,67 @@ describe("CoreAPI", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
+  it("marks persisted running background shell tasks failed on startup", async () => {
+    const dataDir = ".forge/test-core-rehydrate-shell-tasks";
+    rmSync(dataDir, { recursive: true, force: true });
+    const timestamp = new Date().toISOString();
+    const session: Session = {
+      id: "shell-task-session",
+      title: "shell tasks",
+      status: "idle",
+      muted: false,
+      projectId: "fixture-project",
+      workspacePath: join(dataDir, "fixture-workspace"),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    mkdirSync(session.workspacePath!, { recursive: true });
+    writePersistedThread(dataDir, session, [
+      {
+        type: "shell_task_event",
+        seq: 1,
+        timestamp,
+        sessionId: session.id,
+        taskId: "task_running",
+        action: "started",
+        command: "npm run dev",
+        status: "running",
+        message: "Background command started: npm run dev",
+      },
+      {
+        type: "shell_task_event",
+        seq: 2,
+        timestamp,
+        sessionId: session.id,
+        taskId: "task_done",
+        action: "completed",
+        command: "npm test",
+        status: "completed",
+        message: "Background command completed: npm test",
+      },
+    ]);
+
+    const second = new CoreAPI(new ToolRegistry(), { dataDir });
+    second.loadSessions();
+
+    const report = await second.rehydrateAfterStartup();
+
+    expect(report.repairedShellTasks).toBe(1);
+    const shellEvents = second.getThread(session.id).filter((event) => event.type === "shell_task_event");
+    expect(shellEvents).toHaveLength(3);
+    const repaired = shellEvents[shellEvents.length - 1]!;
+    expect(repaired.type).toBe("shell_task_event");
+    if (repaired.type === "shell_task_event") {
+      expect(repaired.taskId).toBe("task_running");
+      expect(repaired.action).toBe("failed");
+      expect(repaired.status).toBe("failed");
+      expect(repaired.message).toBe("Process restarted before this background task completed.");
+    }
+    expect(second.getWorkspaceActivity(session.id).shellTasks.at(-1)?.status).toBe("failed");
+
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
   it("does not dispatch waiting_user sessions during startup rehydration", async () => {
     const dataDir = ".forge/test-core-rehydrate-waiting";
     rmSync(dataDir, { recursive: true, force: true });
@@ -814,6 +923,74 @@ describe("CoreAPI", () => {
     expect(summary.cacheHitRateSession).toBe(90);
     expect(summary.cost).toBeCloseTo(0.000159);
     expect(usageApi.getUsageRecords(session.id)).toHaveLength(1);
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it("runs read-only agent_task through the tracked provider and records usage", async () => {
+    const dataDir = ".forge/test-core-agent-task-usage";
+    rmSync(dataDir, { recursive: true, force: true });
+    const registry = new ToolRegistry();
+    const usageApi = new CoreAPI(registry, { dataDir });
+    usageApi.registerBuiltInTools();
+    let call = 0;
+    const toolPresence: Array<boolean | undefined> = [];
+    usageApi.setModelProvider({
+      getMetadata: () => ({
+        provider: "deepseek",
+        model: "deepseek-v4-pro",
+        contextWindowTokens: 100_000,
+        requiresUsage: true,
+      }),
+      generate: async (messages, tools) => {
+        toolPresence.push(tools !== undefined);
+        call++;
+        if (call === 1) {
+          return {
+            text: "",
+            finishReason: "tool_calls",
+            toolCalls: [{
+              id: "toolu_agent_task",
+              name: "agent_task",
+              args: { subagent_type: "verify", task: "Verify the current workspace evidence." },
+            }],
+            rawUsage: { input_tokens: 400, output_tokens: 20, total_tokens: 420 },
+          };
+        }
+        if (call === 2) {
+          expect(tools?.some((tool) => tool.name === "read_file")).toBe(true);
+          expect(tools?.some((tool) => tool.name === "edit_file")).toBe(false);
+          expect(messages.map((message) => message.content).join("\n")).toContain("read-only ForgeAgent workspace subagent");
+          return {
+            text: "VERDICT: PASS\nEVIDENCE: durable activity is consistent.\nRISKS: none.\nREQUIRED NEXT ACTIONS: none.",
+            finishReason: "stop",
+            rawUsage: { input_tokens: 120, output_tokens: 40, total_tokens: 160 },
+          };
+        }
+        return {
+          text: "Verified.",
+          finishReason: "stop",
+          rawUsage: { input_tokens: 550, output_tokens: 25, total_tokens: 575 },
+        };
+      },
+    });
+    const session = usageApi.createSession("agent task usage");
+    usageApi.appendUserMessage(session.id, "verify this", { dispatch: false });
+
+    await usageApi.runTurn(session.id);
+
+    expect(toolPresence).toEqual([true, true, true]);
+    const thread = usageApi.getThread(session.id);
+    expect(thread.some((event) =>
+      event.type === "tool_result" &&
+      event.toolName === "agent_task" &&
+      String(event.result).includes("VERDICT: PASS"),
+    )).toBe(true);
+    expect(thread.some((event) =>
+      event.type === "activity_event" &&
+      event.title === "Subagent verify",
+    )).toBe(true);
+    expect(thread.filter((event) => event.type === "usage_event")).toHaveLength(3);
+    expect(usageApi.getUsageRecords(session.id)).toHaveLength(3);
     rmSync(dataDir, { recursive: true, force: true });
   });
 

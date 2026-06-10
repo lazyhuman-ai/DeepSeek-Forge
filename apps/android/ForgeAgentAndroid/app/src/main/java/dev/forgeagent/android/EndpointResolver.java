@@ -88,12 +88,12 @@ public final class EndpointResolver {
                     connection.name = desktopName;
                 }
                 connection.markOnline(endpoint);
-                store.upsert(connection);
+                persist(connection);
                 return Result.ok(endpoint, "Connected to " + connection.name + ".");
             } catch (HttpStatusException ex) {
                 if (ex.status == 401 || ex.status == 403) {
                     connection.markOffline("This Android device token was rejected by " + host(endpoint) + ". Pair again from the Mac.");
-                    store.upsert(connection);
+                    persist(connection);
                     return Result.error(connection.statusMessage);
                 }
                 String message = httpErrorMessage(endpoint, ex.status);
@@ -122,11 +122,11 @@ public final class EndpointResolver {
         connection.markOffline(lastError.isEmpty()
             ? "ForgeAgent is not reachable. The Mac may be asleep/offline, Tailscale may be disconnected, or every saved remote URL may be unreachable."
             : lastError);
-        store.upsert(connection);
+        persist(connection);
         return Result.error(connection.statusMessage);
     }
 
-    private ArrayList<String> candidates(ForgeConnection connection) {
+    ArrayList<String> candidates(ForgeConnection connection) {
         Set<String> values = new LinkedHashSet<>();
         if (connection.lastWorkingEndpoint != null && !connection.lastWorkingEndpoint.isEmpty()) {
             addCandidate(values, connection.lastWorkingEndpoint);
@@ -188,6 +188,10 @@ public final class EndpointResolver {
         InputStream stream = status >= 200 && status < 300 ? connection.getInputStream() : connection.getErrorStream();
         String text = readAll(stream);
         if (status < 200 || status >= 300) throw new HttpStatusException(status, text);
+        return parseJsonResponse(text);
+    }
+
+    static JSONObject parseJsonResponse(String text) throws Exception {
         if (text == null || text.isEmpty()) return new JSONObject();
         String trimmed = text.trim();
         if (!trimmed.startsWith("{")) {
@@ -211,22 +215,26 @@ public final class EndpointResolver {
     }
 
     private String httpErrorMessage(String endpoint, int status) {
+        return httpErrorMessage(endpoint, status, TailscaleSupport.deviceAppearsOnTailscale());
+    }
+
+    static String httpErrorMessage(String endpoint, int status, boolean phoneAppearsOnTailscale) {
         if ((status == 502 || status == 503 || status == 504) && TailscaleSupport.isTailscaleEndpoint(endpoint)) {
-            String phoneState = TailscaleSupport.deviceAppearsOnTailscale()
+            String phoneState = phoneAppearsOnTailscale
                 ? "This phone appears to have a Tailscale interface, so the Mac may be offline, asleep, on a different tailnet, or the remote proxy may be pointing at the wrong port."
                 : "This phone does not appear to have an active Tailscale VPN interface.";
-            return host(endpoint)
+            return ForgeConnection.hostLabel(endpoint)
                 + " is a Tailscale address, but it returned HTTP " + status + ". "
                 + phoneState
                 + " Open Tailscale on this phone, confirm it is connected to the same account/tailnet as the Mac, then retry. "
                 + "If you are using Tailscale Serve, point it to the ForgeAgent Core port shown in Pair Mobile.";
         }
         if (status == 502 || status == 503 || status == 504) {
-            return host(endpoint)
+            return ForgeConnection.hostLabel(endpoint)
                 + " returned HTTP " + status + ". A remote tunnel or proxy reached something, but its backend ForgeAgent Core is not available. "
                 + "Check that the Mac is awake, ForgeAgent Core is running, and the remote URL points to the current Core port.";
         }
-        return host(endpoint) + " returned HTTP " + status + ".";
+        return ForgeConnection.hostLabel(endpoint) + " returned HTTP " + status + ".";
     }
 
     private int endpointErrorPriority(String endpoint) {
@@ -236,7 +244,11 @@ public final class EndpointResolver {
         return 2;
     }
 
-    private String snippet(String value) {
+    private void persist(ForgeConnection connection) {
+        if (store != null) store.upsert(connection);
+    }
+
+    private static String snippet(String value) {
         String clean = value == null ? "" : value.replaceAll("\\s+", " ").trim();
         if (clean.length() <= 80) return clean;
         return clean.substring(0, 79) + "…";

@@ -278,7 +278,13 @@ npm run start           # start one local background gateway
 npm run stop            # stop it
 npm run forgeagent -- restart
 npm run check           # typecheck, product build, unit tests, UI e2e
+npm run native:build    # package/smoke macOS app + Android app build + Android connection unit tests
+npm run coding:e2e      # real-provider coding-agent release scenario
+npm run release:gate    # full release gate: check, native build, extensions e2e, release e2e
+npm run release:bundle  # build local beta artifacts under .forge-release/dist
 ```
+
+For release preparation, see [docs/release-checklist.md](docs/release-checklist.md).
 
 ## Troubleshooting
 

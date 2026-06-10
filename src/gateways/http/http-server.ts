@@ -732,6 +732,12 @@ function matchRoute(method: string, reqUrl: string): RouteMatch | null {
   if (method === "GET" && segments.length === 1 && s(0) === "permission-requests") {
     return { handler: "listPermissionRequests", params: {} };
   }
+  if (method === "POST" && segments.length === 1 && s(0) === "permission-grants") {
+    return { handler: "createPermissionGrant", params: {} };
+  }
+  if (method === "DELETE" && segments.length === 2 && s(0) === "permission-grants") {
+    return { handler: "revokePermissionGrant", params: { grantId: s(1)! } };
+  }
   if (method === "GET" && segments.length === 1 && s(0) === "network-urls") {
     return { handler: "networkUrls", params: {} };
   }
@@ -933,6 +939,21 @@ function matchRoute(method: string, reqUrl: string): RouteMatch | null {
     }
     if (method === "GET" && segments.length === 3 && s(2) === "artifacts") {
       return { handler: "listSessionArtifacts", params: { id } };
+    }
+    if (method === "GET" && segments.length === 3 && s(2) === "activity") {
+      return { handler: "getWorkspaceActivity", params: { id } };
+    }
+    if (method === "GET" && segments.length === 3 && s(2) === "diffs") {
+      return { handler: "getSessionDiffs", params: { id } };
+    }
+    if (method === "GET" && segments.length === 3 && s(2) === "diagnostics") {
+      return { handler: "getSessionDiagnostics", params: { id } };
+    }
+    if (method === "GET" && segments.length === 3 && s(2) === "checks") {
+      return { handler: "getVerificationResults", params: { id } };
+    }
+    if (method === "GET" && segments.length === 3 && s(2) === "shell-tasks") {
+      return { handler: "getShellTasks", params: { id } };
     }
     if (method === "POST" && segments.length === 3 && s(2) === "messages") {
       return { handler: "appendMessage", params: { id } };
@@ -1895,6 +1916,46 @@ async function handleRoute(
       return;
     }
 
+    case "createPermissionGrant": {
+      const body = await parseJson(req, options.maxBodyBytes);
+      const sessionId = typeof body.sessionId === "string" ? body.sessionId : "";
+      const grantKind = typeof body.grantKind === "string" ? body.grantKind : "";
+      if (!sessionId) { sendError(res, 400, "Missing sessionId", origin); return; }
+      if (
+        grantKind !== "workspace_edits" &&
+        grantKind !== "safe_commands" &&
+        grantKind !== "package_install" &&
+        grantKind !== "external_runtime" &&
+        grantKind !== "network_write" &&
+        grantKind !== "destructive_action"
+      ) {
+        sendError(res, 400, "Invalid grantKind", origin);
+        return;
+      }
+      try {
+        sendJson(res, 201, api.createPermissionGrant(sessionId, {
+          grantKind,
+          ...(body.scope === "project" || body.scope === "branch" || body.scope === "session" ? { scope: body.scope } : {}),
+          ...(typeof body.branchId === "string" ? { branchId: body.branchId } : {}),
+          ...(typeof body.expiresAt === "string" ? { expiresAt: body.expiresAt } : {}),
+        }), origin);
+      } catch (err) {
+        sendError(res, 400, err instanceof Error ? err.message : String(err), origin);
+      }
+      return;
+    }
+
+    case "revokePermissionGrant": {
+      try {
+        const grant = api.revokePermissionGrant(params.grantId!);
+        if (!grant) { sendError(res, 404, "Permission grant not found", origin); return; }
+        sendJson(res, 200, grant, origin);
+      } catch (err) {
+        sendError(res, 400, err instanceof Error ? err.message : String(err), origin);
+      }
+      return;
+    }
+
     case "getExtensions": {
       sendJson(res, 200, api.getExtensions(), origin);
       return;
@@ -2270,6 +2331,66 @@ async function handleRoute(
     case "getSkillEvents": {
       const afterSeq = parseSeq(routeUrl(req).searchParams.get("afterSeq"));
       sendJson(res, 200, api.getSkillEvents(afterSeq), origin);
+      return;
+    }
+
+    case "getWorkspaceActivity": {
+      const url = routeUrl(req);
+      const branchId = url.searchParams.get("branchId") ?? undefined;
+      try {
+        sendJson(res, 200, api.getWorkspaceActivity(params.id!, branchId), origin);
+      } catch (err) {
+        sendError(res, 404, err instanceof Error ? err.message : String(err), origin);
+      }
+      return;
+    }
+
+    case "getSessionDiffs": {
+      const url = routeUrl(req);
+      const afterSeq = parseSeq(url.searchParams.get("afterSeq"));
+      const branchId = url.searchParams.get("branchId") ?? undefined;
+      try {
+        sendJson(res, 200, api.getSessionDiffs(params.id!, afterSeq, branchId), origin);
+      } catch (err) {
+        sendError(res, 404, err instanceof Error ? err.message : String(err), origin);
+      }
+      return;
+    }
+
+    case "getSessionDiagnostics": {
+      const url = routeUrl(req);
+      const source = url.searchParams.get("source") ?? undefined;
+      const branchId = url.searchParams.get("branchId") ?? undefined;
+      try {
+        sendJson(res, 200, api.getDiagnostics(params.id!, {
+          ...(source !== undefined ? { source } : {}),
+          ...(branchId !== undefined ? { branchId } : {}),
+        }), origin);
+      } catch (err) {
+        sendError(res, 404, err instanceof Error ? err.message : String(err), origin);
+      }
+      return;
+    }
+
+    case "getVerificationResults": {
+      const url = routeUrl(req);
+      const afterSeq = parseSeq(url.searchParams.get("afterSeq"));
+      const branchId = url.searchParams.get("branchId") ?? undefined;
+      try {
+        sendJson(res, 200, api.getVerificationResults(params.id!, afterSeq, branchId), origin);
+      } catch (err) {
+        sendError(res, 404, err instanceof Error ? err.message : String(err), origin);
+      }
+      return;
+    }
+
+    case "getShellTasks": {
+      const branchId = routeUrl(req).searchParams.get("branchId") ?? undefined;
+      try {
+        sendJson(res, 200, api.listShellTasks(params.id!, branchId), origin);
+      } catch (err) {
+        sendError(res, 404, err instanceof Error ? err.message : String(err), origin);
+      }
       return;
     }
 
