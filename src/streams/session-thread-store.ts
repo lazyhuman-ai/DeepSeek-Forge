@@ -7,6 +7,29 @@ import {
 import { dirname } from "node:path";
 import type { SessionEvent, CompactionBlock, Session } from "./event-types.js";
 
+const STRUCTURED_FACT_EVENT_TYPES = new Set<SessionEvent["type"]>([
+  "runtime_event",
+  "permission_request",
+  "permission_response",
+  "activity_event",
+  "todo_event",
+  "diff_event",
+  "diagnostic_event",
+  "verification_event",
+  "evidence_event",
+  "shell_task_event",
+  "worktree_event",
+  "permission_grant_event",
+  "mcp_elicitation_request",
+  "mcp_elicitation_response",
+  "artifact_pointer",
+  "skill_used",
+]);
+
+function preserveDuringCompaction(event: SessionEvent): boolean {
+  return STRUCTURED_FACT_EVENT_TYPES.has(event.type);
+}
+
 export class SessionThreadStore {
   #threads = new Map<string, SessionEvent[]>();
   #filePaths = new Map<string, string>();
@@ -51,7 +74,9 @@ export class SessionThreadStore {
   compactEvents(sessionId: string, startIndex: number, endIndex: number, block: CompactionBlock): void {
     const thread = this.#threads.get(sessionId);
     if (!thread) throw new Error(`Session not found: ${sessionId}`);
-    thread.splice(startIndex, endIndex - startIndex + 1, block);
+    const removed = thread.slice(startIndex, endIndex + 1);
+    const preservedFacts = removed.filter(preserveDuringCompaction);
+    thread.splice(startIndex, endIndex - startIndex + 1, ...preservedFacts, block);
     this.#dirty.add(sessionId);
     this.#scheduleFlush(sessionId);
   }

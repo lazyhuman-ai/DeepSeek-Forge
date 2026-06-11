@@ -19,7 +19,7 @@ export function maybeRecordPassiveTypeScriptDiagnostics(input: {
     const diagnostics = typeScriptWorkspace(projectRoot).diagnostics();
     input.context?.workspaceActivity?.recordDiagnostics({
       sessionId: input.sessionId,
-      ...(input.context.branchId !== undefined ? { branchId: input.context.branchId } : {}),
+      ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
       source: "typescript-language-service",
       diagnostics,
       message: diagnostics.length === 0
@@ -29,7 +29,7 @@ export function maybeRecordPassiveTypeScriptDiagnostics(input: {
   } catch (error) {
     input.context?.workspaceActivity?.recordDiagnostics({
       sessionId: input.sessionId,
-      ...(input.context.branchId !== undefined ? { branchId: input.context.branchId } : {}),
+      ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
       source: "typescript-language-service",
       diagnostics: [],
       failed: true,

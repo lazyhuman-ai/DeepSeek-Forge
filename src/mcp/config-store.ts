@@ -256,6 +256,43 @@ const BUILTIN_CATALOG: McpCatalogEntry[] = [
     postInstall: "Install Blender 3.0+ and start the Blender MCP add-on/socket in Blender before using tools. The MCP server connects to BLENDER_HOST:BLENDER_PORT.",
     tags: ["blender", "3d", "rendering", "creative"],
   },
+  {
+    id: "codegraph",
+    name: "CodeGraph",
+    description: "Pinned CodeGraph MCP server for symbol search, caller/callee graphs, impact analysis, traces, and architecture context.",
+    transport: "stdio",
+    command: "{{codegraph}}",
+    args: ["serve", "--mcp"],
+    trust: "trusted",
+    sourceUrl: "https://github.com/colbymchenry/codegraph",
+    packageName: "codegraph",
+    packageVersion: "v0.9.7",
+    auth: { type: "none" },
+    defaultEnabledTools: [
+      "codegraph_context",
+      "codegraph_search",
+      "codegraph_callers",
+      "codegraph_callees",
+      "codegraph_impact",
+      "codegraph_trace",
+      "codegraph_files",
+      "codegraph_status",
+    ],
+    readOnlyToolNames: [
+      "codegraph_callees",
+      "codegraph_callers",
+      "codegraph_context",
+      "codegraph_explore",
+      "codegraph_files",
+      "codegraph_impact",
+      "codegraph_node",
+      "codegraph_search",
+      "codegraph_status",
+      "codegraph_trace",
+    ],
+    postInstall: "ForgeAgent downloads and verifies CodeGraph v0.9.7, initializes .codegraph/ in the current project, then starts it as a background read-only MCP server.",
+    tags: ["code", "codegraph", "architecture", "impact-analysis", "symbol-search"],
+  },
 ];
 
 function cloneCatalogEntry(entry: McpCatalogEntry): McpCatalogEntry {
@@ -281,6 +318,7 @@ function cloneCatalogEntry(entry: McpCatalogEntry): McpCatalogEntry {
     ...(entry.auth.scopes !== undefined ? { scopes: [...entry.auth.scopes] } : {}),
   };
   if (entry.defaultEnabledTools !== undefined) cloned.defaultEnabledTools = [...entry.defaultEnabledTools];
+  if (entry.readOnlyToolNames !== undefined) cloned.readOnlyToolNames = [...entry.readOnlyToolNames];
   if (entry.postInstall !== undefined) cloned.postInstall = entry.postInstall;
   if (entry.setupRequired !== undefined) cloned.setupRequired = entry.setupRequired;
   if (entry.tags !== undefined) cloned.tags = [...entry.tags];
@@ -359,6 +397,7 @@ function normalizeServer(raw: unknown, sourcePath?: string): McpServerConfig | n
   if (typeof record.timeoutMs === "number") server.timeoutMs = record.timeoutMs;
   if (typeof record.connectTimeoutMs === "number") server.connectTimeoutMs = record.connectTimeoutMs;
   if (typeof record.supportsParallelToolCalls === "boolean") server.supportsParallelToolCalls = record.supportsParallelToolCalls;
+  if (Array.isArray(record.readOnlyToolNames)) server.readOnlyToolNames = record.readOnlyToolNames.map(String);
   if (typeof record.allowSampling === "boolean") server.allowSampling = record.allowSampling;
   if (typeof record.allowElicitation === "boolean") server.allowElicitation = record.allowElicitation;
   if (sourcePath) {

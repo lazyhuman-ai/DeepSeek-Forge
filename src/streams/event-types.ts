@@ -211,6 +211,7 @@ export type PermissionResponseEvent = EventBase & {
 
 export type ActivityKind =
   | "plan"
+  | "analysis"
   | "change"
   | "diagnostic"
   | "verification"
@@ -318,6 +319,33 @@ export type VerificationEvent = EventBase & {
   artifactId?: string;
 };
 
+export type EvidenceKind =
+  | "verification"
+  | "diff"
+  | "files"
+  | "diagnostics"
+  | "subagent"
+  | "manual";
+
+export type EvidenceReference = {
+  kind: EvidenceKind;
+  seq?: number;
+  command?: string;
+  path?: string;
+  note?: string;
+};
+
+export type EvidenceEvent = EventBase & {
+  type: "evidence_event";
+  evidenceId: string;
+  step: string;
+  todoId?: string;
+  status: "passed" | "failed";
+  evidence: EvidenceReference[];
+  matchedSeqs: number[];
+  message: string;
+};
+
 export type ShellTaskEvent = EventBase & {
   type: "shell_task_event";
   taskId: string;
@@ -331,7 +359,7 @@ export type ShellTaskEvent = EventBase & {
 
 export type WorktreeEvent = EventBase & {
   type: "worktree_event";
-  action: "entered" | "exited" | "kept" | "removed" | "failed";
+  action: "entered" | "committed" | "exited" | "kept" | "removed" | "merged" | "failed";
   path?: string;
   branch?: string;
   message: string;
@@ -388,6 +416,9 @@ export type UsageEvent = EventBase & {
   contextUsedPercent?: number;
   cost?: number;
   currency?: string;
+  cachePrefixChanged?: boolean;
+  cachePrefixReasons?: string[];
+  cacheHitRate?: number;
   estimated: boolean;
   message: string;
 };
@@ -430,6 +461,7 @@ export type SkillEvent = EventBase & {
     | "proposal_created"
     | "proposal_rejected"
     | "proposal_applied"
+    | "dynamic_loaded"
     | "evolution_degraded"
     | "evolution_recovered";
   skillName?: string;
@@ -456,6 +488,7 @@ export type SessionEvent =
   | DiffEvent
   | DiagnosticEvent
   | VerificationEvent
+  | EvidenceEvent
   | ShellTaskEvent
   | WorktreeEvent
   | PermissionGrantEvent

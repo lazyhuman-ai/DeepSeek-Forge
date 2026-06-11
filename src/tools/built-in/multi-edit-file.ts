@@ -8,6 +8,7 @@ import { readTextFile, writeTextFile } from "../text-file-io.js";
 import { maybeRecordPassiveTypeScriptDiagnostics } from "./passive-diagnostics.js";
 import { buildEditCheckpoint } from "./edit-checkpoint.js";
 import { findActualString, preserveQuoteStyle } from "./edit-string-utils.js";
+import { notifyWorkspaceFileChanged } from "./workspace-file-hooks.js";
 
 const MAX_EDIT_FILE_SIZE = 1024 * 1024 * 1024;
 
@@ -114,7 +115,7 @@ async function handler(
   context?.workspaceActivity?.recordDiff(
     sessionId,
     buildStructuredDiff(filePath, beforeContent, updatedContent, "updated"),
-    context.branchId,
+    context?.branchId,
     buildEditCheckpoint({
       beforeExists: true,
       beforeContent,
@@ -123,6 +124,12 @@ async function handler(
     }),
   );
   maybeRecordPassiveTypeScriptDiagnostics({ sessionId, filePath, context });
+  await notifyWorkspaceFileChanged(sessionId, {
+    filePath,
+    beforeContent,
+    afterContent: updatedContent,
+    operation: "updated",
+  }, context);
 
   return `File edited: ${filePath}. Applied ${parsed.length} edit instruction(s), ${replacements} replacement(s).`;
 }

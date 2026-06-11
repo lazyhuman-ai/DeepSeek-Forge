@@ -114,7 +114,8 @@ function matchSimpleGlob(filepath: string, pattern: string): boolean {
 }
 
 function outputMode(value: unknown): GrepOutputMode {
-  return value === "files" || value === "count" ? value : "content";
+  if (value === "files_with_matches") return "files";
+  return value === "content" || value === "count" || value === "files" ? value : "files";
 }
 
 function boundedNumber(value: unknown, fallback: number, max: number): number {
@@ -134,7 +135,8 @@ async function handler(
   _sessionId: string,
   context?: ToolPathContext,
 ): Promise<unknown> {
-  const pattern = args.pattern as string;
+  const pattern = typeof args.pattern === "string" ? args.pattern : "";
+  if (!pattern) return { output: "pattern is required.", isError: true };
   const defaultRoot = context?.projectRoot ?? process.cwd();
   const resolvedPath = resolveToolPath(args.path ? args : { ...args, path: defaultRoot }, context, {
     argName: "path",
@@ -144,17 +146,28 @@ async function handler(
   });
   if (!resolvedPath.ok) return resolvedPath;
   const path = resolvedPath.path;
-  const include = args.include as string | undefined;
-  const caseInsensitive = (args.case_insensitive as boolean) ?? false;
+  const include = (args.include ?? args.glob) as string | undefined;
+  const caseInsensitive = ((args.case_insensitive ?? args["-i"]) as boolean) ?? false;
   const mode = outputMode(args.output_mode);
   const headLimit = boundedNumber(args.head_limit, DEFAULT_HEAD_LIMIT, MAX_HEAD_LIMIT);
   const offset = boundedNumber(args.offset, 0, Number.MAX_SAFE_INTEGER);
-  const beforeContext = boundedNumber(args.before_context ?? args.context, 0, 25);
-  const afterContext = boundedNumber(args.after_context ?? args.context, 0, 25);
+  const contextLines = args.context ?? args["-C"];
+  const beforeContext = boundedNumber(args.before_context ?? args["-B"] ?? contextLines, 0, 25);
+  const afterContext = boundedNumber(args.after_context ?? args["-A"] ?? contextLines, 0, 25);
   const type = typeof args.type === "string" && args.type.trim() ? args.type.trim() : undefined;
   const multiline = args.multiline === true;
 
-  const searchDir = existsSync(path) && !path.includes("*") ? path : process.cwd();
+  if (!existsSync(path)) {
+    return {
+      output: [
+        "Grep search path does not exist.",
+        `Path: ${path}`,
+        "Recovery: omit path to search the current project root, use glob to find the file, or provide an existing file/directory inside the workspace.",
+      ].join("\n"),
+      isError: true,
+    };
+  }
+  const searchDir = path;
 
   try {
     let result: string;
@@ -191,7 +204,7 @@ async function handler(
         outputMode: GrepOutputMode;
       } = {
         caseInsensitive,
-        maxResults: offset + headLimit,
+        maxResults: headLimit === 0 ? Number.MAX_SAFE_INTEGER : offset + headLimit,
         outputMode: mode,
       };
       if (include !== undefined) nativeOptions.includeGlob = include;
@@ -201,8 +214,10 @@ async function handler(
     if (!result) return "No matches found.";
 
     const lines = result.split("\n");
-    const visible = lines.slice(offset, offset + headLimit);
-    const truncated = offset + visible.length < lines.length;
+    const visible = headLimit === 0
+      ? lines.slice(offset)
+      : lines.slice(offset, offset + headLimit);
+    const truncated = headLimit !== 0 && offset + visible.length < lines.length;
 
     let output = visible.join("\n");
     if (truncated) {
@@ -212,7 +227,7 @@ async function handler(
     return output;
   } catch (error: unknown) {
     const err = error as Error;
-    return `Grep failed: ${err.message}`;
+    return { output: `Grep failed: ${err.message}`, isError: true };
   }
 }
 
@@ -221,9 +236,9 @@ export const grepTool: ExecutableToolDefinition = buildTool({
   description: `Search for a pattern in file contents using ripgrep.
 
 Usage:
-- Default output format: file_path:line_number:content
-- output_mode=files returns matching file paths; output_mode=count returns per-file match counts
-- Use include to filter by file glob (e.g., "*.ts", "*.md")
+- Default output mode returns matching file paths to keep context small
+- output_mode=content returns file_path:line_number:content; output_mode=files/files_with_matches returns matching file paths; output_mode=count returns per-file match counts
+- Use include or glob to filter by file glob (e.g., "*.ts", "*.md")
 - Set case_insensitive to true for case-insensitive search
 - Use context / before_context / after_context for nearby lines, and head_limit / offset for paging
 - Use type for ripgrep file types (e.g., "ts", "py", "md") and multiline for multi-line regex search
@@ -244,6 +259,11 @@ Usage:
       description: "Glob pattern to filter files (e.g., '*.ts')",
       optional: true,
     },
+    glob: {
+      type: "string",
+      description: "Alias for include, matching Claude Code's grep parameter.",
+      optional: true,
+    },
     case_insensitive: {
       type: "boolean",
       description: "Set to true for case-insensitive search",
@@ -251,7 +271,7 @@ Usage:
     },
     output_mode: {
       type: "string",
-      description: "content, files, or count. Defaults to content.",
+      description: "content, files/files_with_matches, or count. Defaults to files/files_with_matches.",
       optional: true,
     },
     context: {
@@ -259,14 +279,29 @@ Usage:
       description: "Number of context lines before and after each match.",
       optional: true,
     },
+    "-C": {
+      type: "number",
+      description: "Alias for context.",
+      optional: true,
+    },
     before_context: {
       type: "number",
       description: "Number of lines before each match.",
       optional: true,
     },
+    "-B": {
+      type: "number",
+      description: "Alias for before_context.",
+      optional: true,
+    },
     after_context: {
       type: "number",
       description: "Number of lines after each match.",
+      optional: true,
+    },
+    "-A": {
+      type: "number",
+      description: "Alias for after_context.",
       optional: true,
     },
     head_limit: {
@@ -287,6 +322,11 @@ Usage:
     multiline: {
       type: "boolean",
       description: "Enable multi-line regex search.",
+      optional: true,
+    },
+    "-i": {
+      type: "boolean",
+      description: "Alias for case_insensitive.",
       optional: true,
     },
   },

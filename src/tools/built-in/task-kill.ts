@@ -2,7 +2,8 @@ import type { ToolExecutionContext } from "../../agent/tool-executor.js";
 import type { ShellTaskEvent } from "../../streams/event-types.js";
 import type { ExecutableToolDefinition } from "../schemas.js";
 import { buildTool } from "../schemas.js";
-import { killShellTask } from "./shell-task-store.js";
+import { killShellTask, loadShellTaskFromFile } from "./shell-task-store.js";
+import { join } from "node:path";
 
 function latestShellTaskFromThread(
   sessionId: string,
@@ -17,6 +18,15 @@ function latestShellTaskFromThread(
   return undefined;
 }
 
+function safeSessionId(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || "session";
+}
+
+function shellTaskStatePath(context: ToolExecutionContext | undefined, sessionId: string, taskId: string): string {
+  const dataDir = context?.dataDir ?? join(context?.projectRoot ?? process.cwd(), ".forge");
+  return join(dataDir, "shell-tasks", safeSessionId(sessionId), `${taskId}.json`);
+}
+
 async function handler(
   args: Record<string, unknown>,
   sessionId: string,
@@ -26,6 +36,20 @@ async function handler(
   if (!taskId) return { output: "task_id is required.", isError: true };
   const task = killShellTask(taskId);
   if (!task) {
+    const persisted = loadShellTaskFromFile(shellTaskStatePath(context, sessionId, taskId));
+    if (persisted) {
+      return {
+        output: [
+          `No live background process is available for task ${taskId}.`,
+          `Persisted status: ${persisted.status}.`,
+          `Command: ${persisted.command}`,
+          persisted.status === "running"
+            ? "Recovery: ForgeAgent restarted or lost the original process handle before this task finished. There is nothing active to kill from this process; start a fresh command if needed."
+            : "Recovery: no action is needed unless you want to start a fresh command.",
+        ].join("\n"),
+        isError: true,
+      };
+    }
     const latest = latestShellTaskFromThread(sessionId, taskId, context);
     if (!latest) return { output: `Unknown shell task: ${taskId}`, isError: true };
     return {
@@ -42,7 +66,7 @@ async function handler(
   }
   context?.workspaceActivity?.recordShellTask({
     sessionId,
-    ...(context.branchId !== undefined ? { branchId: context.branchId } : {}),
+    ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
     taskId,
     action: "killed",
     command: task.command,

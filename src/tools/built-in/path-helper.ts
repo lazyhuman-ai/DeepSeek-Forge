@@ -4,7 +4,7 @@ import type { PathSandbox, SandboxAccess } from "../../sandbox/path-sandbox.js";
 
 export type ToolPathContext = Pick<
   ToolExecutionContext,
-  "pathSandbox" | "workspaceActivity" | "branchId" | "readFileStateScope" | "projectRoot" | "signal"
+  "pathSandbox" | "workspaceActivity" | "workspaceHooks" | "branchId" | "readFileStateScope" | "projectRoot" | "signal"
 > & {
   pathSandbox?: PathSandbox;
 };
@@ -23,7 +23,21 @@ export function resolveToolPath(
     action: string;
   },
 ): ToolPathResult {
-  const requested = resolve(String(args[options.argName] ?? ""));
+  const raw = args[options.argName];
+  if (typeof raw !== "string" || !raw.trim()) {
+    return {
+      ok: false,
+      output: [
+        "Tool path argument is missing or empty.",
+        `Tool: ${options.toolName}`,
+        `Requested action: ${options.action}`,
+        `Argument: ${options.argName}`,
+        "Recovery: provide one explicit path inside the current project workspace.",
+      ].join("\n"),
+      isError: true,
+    };
+  }
+  const requested = raw.trim();
   const resolved = context?.pathSandbox?.resolvePath(
     requested,
     options.access,
@@ -33,5 +47,5 @@ export function resolveToolPath(
   if (resolved && !resolved.ok) {
     return { ok: false, output: resolved.message, isError: true };
   }
-  return { ok: true, path: resolved?.path ?? requested };
+  return { ok: true, path: resolved?.path ?? resolve(context?.projectRoot ?? process.cwd(), requested) };
 }

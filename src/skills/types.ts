@@ -113,6 +113,7 @@ export type SkillEventAction =
   | "proposal_created"
   | "proposal_rejected"
   | "proposal_applied"
+  | "dynamic_loaded"
   | "evolution_degraded"
   | "evolution_recovered";
 

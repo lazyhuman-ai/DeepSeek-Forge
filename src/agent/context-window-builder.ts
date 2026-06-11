@@ -211,6 +211,18 @@ function appendNonToolCallEvent(
       });
       break;
 
+    case "evidence_event":
+      messages.push({
+        role: "system",
+        content: [
+          `[Evidence: ${event.status}] ${event.step}`,
+          event.todoId ? `Todo id: ${event.todoId}` : "",
+          `Matched event seqs: ${event.matchedSeqs.join(", ") || "none"}`,
+          event.message,
+        ].filter(Boolean).join("\n"),
+      });
+      break;
+
     case "shell_task_event":
       messages.push({
         role: "system",

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -40,6 +40,29 @@ function readInfoPlist() {
   return JSON.parse(raw);
 }
 
+function bundledNodeVersion() {
+  const nodePath = join(resources, "node/bin/node");
+  let lastFailure = "not executed";
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const result = spawnSync(nodePath, ["--version"], {
+      encoding: "utf-8",
+      timeout: 10_000,
+    });
+    const version = result.stdout.trim();
+    if (result.status === 0 && /^v\d+\./.test(version)) return version;
+    lastFailure = JSON.stringify({
+      attempt,
+      status: result.status,
+      signal: result.signal,
+      error: result.error?.message,
+      stdout: result.stdout.trim(),
+      stderr: result.stderr.trim(),
+    });
+    if (attempt < 3) spawnSync("sleep", ["0.2"], { stdio: "ignore" });
+  }
+  fail(`bundled Node.js did not execute --version after 3 attempts: ${lastFailure}`);
+}
+
 function main() {
   assertDir(appRoot, "ForgeAgent.app bundle");
   assertDir(contents, "Contents directory");
@@ -60,8 +83,7 @@ function main() {
   if (!assetFiles.some((name) => name.endsWith(".js"))) fail("bundled Web Console has no JavaScript asset");
   if (!assetFiles.some((name) => name.endsWith(".css"))) fail("bundled Web Console has no CSS asset");
 
-  const nodeVersion = execFileSync(join(resources, "node/bin/node"), ["--version"], { encoding: "utf-8" }).trim();
-  if (!/^v\d+\./.test(nodeVersion)) fail(`bundled Node.js did not report a normal version: ${nodeVersion}`);
+  const nodeVersion = bundledNodeVersion();
 
   const info = readInfoPlist();
   if (info.CFBundleExecutable !== "ForgeAgentMac") fail("Info.plist CFBundleExecutable must be ForgeAgentMac");

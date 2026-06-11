@@ -52,6 +52,12 @@ function walk(root: string, dir = root, files: string[] = []): string[] {
 
 export function buildWorkspaceFileIndex(projectRoot: string): WorkspaceFileIndex {
   const root = resolve(projectRoot);
+  if (!existsSync(root)) {
+    throw new Error(`Workspace index root does not exist: ${root}`);
+  }
+  if (!statSync(root).isDirectory()) {
+    throw new Error(`Workspace index root is not a directory: ${root}`);
+  }
   const git = gitFiles(root);
   if (git && git.length > 0) return { root, files: git, source: "git" };
   return { root, files: walk(root).sort(), source: "filesystem" };

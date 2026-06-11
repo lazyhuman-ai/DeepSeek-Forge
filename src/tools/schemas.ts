@@ -42,11 +42,29 @@ export type ToolHandler = (
     toolsProvider?: () => ToolDefinition[];
     permissionBroker?: import("../permissions/tool-policy.js").PermissionBroker;
     workspaceActivity?: import("../workspace/activity-manager.js").WorkspaceActivityManager;
+    workspaceHooks?: {
+      onFileTouched?: (input: {
+        sessionId: string;
+        branchId?: string;
+        filePath: string;
+        reason: "read" | "search" | "edit";
+      }) => void | Promise<void>;
+      onFileChanged?: (input: {
+        sessionId: string;
+        branchId?: string;
+        filePath: string;
+        beforeContent: string | null;
+        afterContent: string;
+        operation: "created" | "updated" | "deleted";
+      }) => void | Promise<void>;
+    };
     modelProvider?: import("../agent/model-provider.js").ModelProvider;
     pathSandbox?: import("../sandbox/path-sandbox.js").PathSandbox;
     projectRoot?: string;
+    dataDir?: string;
     readFileStateScope?: string;
     readThread?: (sessionId: string) => import("../streams/event-types.js").SessionEvent[];
+    hostChecks?: import("../workspace/host-checks.js").HostVerifyCheck[];
     bashSandboxMode?: "disabled" | "best_effort" | "enforce";
   },
 ) => Promise<unknown>;

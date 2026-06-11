@@ -3,6 +3,7 @@ import type { TodoItem, VerificationEvent } from "../../streams/event-types.js";
 import type { ExecutableToolDefinition } from "../schemas.js";
 import { buildTool } from "../schemas.js";
 import type { ToolExecutionContext } from "../../agent/tool-executor.js";
+import { missingEvidenceForCompletedTodos } from "../../workspace/evidence.js";
 
 const VALID_STATUSES = new Set<TodoItem["status"]>([
   "pending",
@@ -37,6 +38,39 @@ function parseTodoItems(value: unknown): TodoItem[] | string {
   return items;
 }
 
+function finalizationReminders(
+  items: TodoItem[],
+  events: ReturnType<NonNullable<ToolExecutionContext["readThread"]>>,
+  context?: ToolExecutionContext,
+): string[] {
+  const open = items.filter((item) => item.status !== "completed" && item.status !== "cancelled").length;
+  if (open !== 0) return [];
+
+  const messages: string[] = [];
+  if (items.length >= 3 && !items.some((item) => /verify|verification|test|typecheck|lint|check|review/i.test(item.content))) {
+    messages.push("Verification reminder: you just completed a 3+ item plan without a verification/review todo. Before finalizing, run an appropriate check or spawn a verify subagent.");
+  }
+  const latestDiffSeq = Math.max(0, ...events
+    .filter((event) => event.type === "diff_event" && (context?.branchId === undefined || event.branchId === undefined || event.branchId === context?.branchId))
+    .map((event) => event.seq));
+  const latestCheck = [...events].reverse().find((event): event is VerificationEvent => (
+    event.type === "verification_event" &&
+    (context?.branchId === undefined || event.branchId === undefined || event.branchId === context?.branchId)
+  ));
+  if (latestDiffSeq > 0 && (!latestCheck || latestCheck.seq < latestDiffSeq || latestCheck.status !== "passed")) {
+    messages.push("Verification reminder: workspace changes are newer than the latest passing check. Run an appropriate check or call workspace_review before finalizing.");
+  }
+  const latestWorkspaceReview = [...events].reverse().find((event) => (
+    event.type === "activity_event" &&
+    event.title === "Workspace review" &&
+    (context?.branchId === undefined || event.branchId === undefined || event.branchId === context?.branchId)
+  ));
+  if (latestWorkspaceReview?.type === "activity_event" && latestWorkspaceReview.status === "failed") {
+    messages.push("Workspace review reminder: the latest workspace_review reported not-ready before this todo update. Run workspace_review again before finalizing so the latest closed todos and verification facts are checked.");
+  }
+  return messages;
+}
+
 async function handler(
   args: Record<string, unknown>,
   sessionId: string,
@@ -44,7 +78,7 @@ async function handler(
 ): Promise<unknown> {
   let items: TodoItem[] | string;
   try {
-    items = parseTodoItems(args.items);
+    items = parseTodoItems(args.items ?? args.todos);
   } catch (error) {
     return {
       output: error instanceof Error ? error.message : String(error),
@@ -52,30 +86,23 @@ async function handler(
     };
   }
   if (typeof items === "string") return { output: items, isError: true };
-  context?.workspaceActivity?.recordTodos(sessionId, items, context.branchId);
-  const open = items.filter((item) => item.status !== "completed" && item.status !== "cancelled").length;
-  const messages = [`Plan updated: ${items.length} item(s), ${open} still open.`];
-  if (open === 0) {
-    const events = context?.readThread?.(sessionId) ?? [];
-    const latestDiffSeq = Math.max(0, ...events
-      .filter((event) => event.type === "diff_event" && (context?.branchId === undefined || event.branchId === undefined || event.branchId === context.branchId))
-      .map((event) => event.seq));
-    const latestCheck = [...events].reverse().find((event): event is VerificationEvent => (
-      event.type === "verification_event" &&
-      (context?.branchId === undefined || event.branchId === undefined || event.branchId === context.branchId)
-    ));
-    if (latestDiffSeq > 0 && (!latestCheck || latestCheck.seq < latestDiffSeq || latestCheck.status !== "passed")) {
-      messages.push("Verification reminder: workspace changes are newer than the latest passing check. Run an appropriate check or call workspace_review before finalizing.");
-    }
-    const latestWorkspaceReview = [...events].reverse().find((event) => (
-      event.type === "activity_event" &&
-      event.title === "Workspace review" &&
-      (context?.branchId === undefined || event.branchId === undefined || event.branchId === context.branchId)
-    ));
-    if (latestWorkspaceReview?.type === "activity_event" && latestWorkspaceReview.status === "failed") {
-      messages.push("Workspace review reminder: the latest workspace_review reported not-ready before this todo update. Run workspace_review again before finalizing so the latest closed todos and verification facts are checked.");
-    }
+  const events = context?.readThread?.(sessionId) ?? [];
+  const reminders = finalizationReminders(items, events, context);
+  const missingEvidence = missingEvidenceForCompletedTodos(items, events, context?.branchId);
+  if (missingEvidence.length > 0) {
+    return {
+      output: [
+        "todo_write refused to mark todo item(s) completed without host-verifiable evidence receipts.",
+        ...missingEvidence.map((missing) => `- ${missing.todo.content}${missing.todo.id ? ` (${missing.todo.id})` : ""}: ${missing.reason}`),
+        "Recovery: call complete_step for each newly completed todo with evidence from real diff, verification, diagnostics, subagent, files, or manual user confirmation, then call todo_write again.",
+        ...reminders,
+      ].join("\n"),
+      isError: true,
+    };
   }
+  context?.workspaceActivity?.recordTodos(sessionId, items, context?.branchId);
+  const open = items.filter((item) => item.status !== "completed" && item.status !== "cancelled").length;
+  const messages = [`Plan updated: ${items.length} item(s), ${open} still open.`, ...reminders];
   return messages.join("\n");
 }
 
@@ -86,6 +113,20 @@ export const todoWriteTool: ExecutableToolDefinition = buildTool({
     items: {
       type: "array",
       description: "Ordered todo items with content and status.",
+      items: {
+        type: "object",
+        description: "Todo item",
+        properties: {
+          id: { type: "string", description: "Stable todo id. Omit for new items.", optional: true },
+          content: { type: "string", description: "Concrete task item." },
+          status: { type: "string", description: "pending, in_progress, completed, or cancelled." },
+        },
+      },
+    },
+    todos: {
+      type: "array",
+      description: "Alias for items, matching Claude Code's todo_write parameter.",
+      optional: true,
       items: {
         type: "object",
         description: "Todo item",

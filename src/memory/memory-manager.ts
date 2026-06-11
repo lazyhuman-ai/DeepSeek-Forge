@@ -161,6 +161,8 @@ function renderEvent(event: SessionEvent): string {
       return `[usage_event #${event.seq} ${event.provider}/${event.model}]\n${event.message}`;
     case "context_usage_event":
       return `[context_usage_event #${event.seq} ${event.source}]\n${event.message}`;
+    case "evidence_event":
+      return `[evidence_event #${event.seq} ${event.status} step=${event.step} matched=${event.matchedSeqs.join(",")}]\n${event.message}`;
     case "skill_used":
       return `[skill_used #${event.seq} ${event.skillName}]\n${event.message}`;
     case "skill_event":

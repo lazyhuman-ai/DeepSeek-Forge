@@ -11,6 +11,30 @@ function streamFromChunks(chunks: string[]): ReadableStream<Uint8Array> {
   });
 }
 
+function streamThatErrors(chunks: string[], error: Error): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.error(error);
+    },
+  });
+}
+
+function streamThatErrorsAfterReadingChunks(chunks: string[], error: Error): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let index = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (index < chunks.length) {
+        controller.enqueue(encoder.encode(chunks[index++]!));
+        return;
+      }
+      controller.error(error);
+    },
+  });
+}
+
 describe("DeepSeekProvider", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -81,7 +105,7 @@ describe("DeepSeekProvider", () => {
     expect(response.rawUsage?.cache_miss_tokens).toBe(400);
   });
 
-  it("does not send reasoning_content back to DeepSeek", async () => {
+  it("sends historical reasoning_content back to DeepSeek when context requires it", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -93,14 +117,46 @@ describe("DeepSeekProvider", () => {
 
     const provider = new DeepSeekProvider({ baseUrl: "https://deepseek.test", apiKey: "k", model: "m" });
     await provider.generate([
-      { role: "assistant", content: "previous", reasoning_content: "do not resend" },
+      { role: "assistant", content: "previous", reasoning_content: "thinking trace to resend" },
       { role: "user", content: "continue" },
     ]);
 
     const init = fetchMock.mock.calls[0]![1] as RequestInit;
     const body = JSON.parse(String(init.body));
-    expect(JSON.stringify(body.messages)).not.toContain("reasoning_content");
-    expect(JSON.stringify(body.messages)).not.toContain("do not resend");
+    expect(body.messages[0]).toMatchObject({
+      role: "assistant",
+      content: "previous",
+      reasoning_content: "thinking trace to resend",
+    });
+  });
+
+  it("adds a readable reasoning_content placeholder for recovered assistant tool calls", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 10, completion_tokens: 1, total_tokens: 11 },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const provider = new DeepSeekProvider({ baseUrl: "https://deepseek.test", apiKey: "k", model: "m" });
+    await provider.generate([
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [{ id: "tc_1", name: "read_file", args: { file_path: "src/math.ts" } }],
+      },
+      { role: "tool", content: "Process restarted before this tool completed.", tool_call_id: "tc_1" },
+      { role: "user", content: "continue" },
+    ]);
+
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    const body = JSON.parse(String(init.body));
+    expect(body.messages[0]).toMatchObject({
+      role: "assistant",
+      reasoning_content: "[reasoning_content unavailable in durable thread]",
+    });
   });
 
   it("reports retry status through callbacks", async () => {
@@ -135,5 +191,79 @@ describe("DeepSeekProvider", () => {
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     randomSpy.mockRestore();
+  });
+
+  it("retries a streaming body termination before any visible token is emitted", async () => {
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        body: streamThatErrors([], new Error("terminated")),
+        status: 200,
+        statusText: "OK",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: streamFromChunks([
+          'data: {"choices":[{"delta":{"content":"recovered"}}]}\n\n',
+          'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}\n\n',
+          "data: [DONE]\n\n",
+        ]),
+        status: 200,
+        statusText: "OK",
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const statuses: string[] = [];
+    const onToken = vi.fn();
+    const provider = new DeepSeekProvider({
+      baseUrl: "https://deepseek.test",
+      apiKey: "k",
+      model: "m",
+      maxRetries: 1,
+    });
+    const response = await provider.generate(
+      [{ role: "user", content: "hello" }],
+      undefined,
+      { onToken, onStatus: (message) => statuses.push(message) },
+    );
+
+    expect(response.text).toBe("recovered");
+    expect(response.rawUsage).toEqual({ input_tokens: 12, output_tokens: 3, total_tokens: 15 });
+    expect(onToken).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(statuses).toEqual([
+      "DeepSeek stream ended unexpectedly (terminated); retrying in 1s (1/1).",
+    ]);
+    randomSpy.mockRestore();
+  });
+
+  it("does not retry a streaming body termination after visible tokens were emitted", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: streamThatErrorsAfterReadingChunks([
+        'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n',
+      ], new Error("terminated")),
+      status: 200,
+      statusText: "OK",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onToken = vi.fn();
+    const provider = new DeepSeekProvider({
+      baseUrl: "https://deepseek.test",
+      apiKey: "k",
+      model: "m",
+      maxRetries: 1,
+    });
+
+    await expect(provider.generate(
+      [{ role: "user", content: "hello" }],
+      undefined,
+      { onToken },
+    )).rejects.toThrow("terminated");
+
+    expect(onToken).toHaveBeenCalledWith("partial");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

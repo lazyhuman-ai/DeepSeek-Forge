@@ -29,6 +29,7 @@ export type McpServerConfig = {
   timeoutMs?: number;
   connectTimeoutMs?: number;
   supportsParallelToolCalls?: boolean;
+  readOnlyToolNames?: string[];
   allowSampling?: boolean;
   allowElicitation?: boolean;
   source?: "local" | "project" | "imported" | "catalog";
@@ -127,6 +128,7 @@ export type McpCatalogEntry = {
     envVar?: string;
   };
   defaultEnabledTools?: string[];
+  readOnlyToolNames?: string[];
   postInstall?: string;
   setupRequired?: boolean;
   tags?: string[];

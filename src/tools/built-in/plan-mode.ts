@@ -34,11 +34,11 @@ function createMissingWorkspaceAutopilotGrants(
       sessionId,
       grantKind,
       scope,
-      ...(scope === "branch" && context?.branchId !== undefined ? { branchId: context.branchId } : {}),
+      ...(scope === "branch" && context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
     });
     context?.workspaceActivity?.recordPermissionGrant({
       sessionId,
-      ...(context?.branchId !== undefined ? { branchId: context.branchId } : {}),
+      ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
       grantId: grant.grantId,
       grantKind,
       action: "created",
@@ -61,7 +61,7 @@ async function enterHandler(
     : "The task needs analysis and a proposed plan before workspace changes.";
   context?.workspaceActivity?.recordActivity({
     sessionId,
-    ...(context?.branchId !== undefined ? { branchId: context.branchId } : {}),
+    ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
     activityKind: "plan",
     status: "running",
     title: "Plan mode",
@@ -96,7 +96,7 @@ async function exitHandler(
     : [];
   context?.workspaceActivity?.recordActivity({
     sessionId,
-    ...(context?.branchId !== undefined ? { branchId: context.branchId } : {}),
+    ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
     activityKind: "plan",
     status: "completed",
     title: "Plan mode exited",

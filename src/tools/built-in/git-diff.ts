@@ -65,8 +65,8 @@ async function handler(
     const changedCount = status.split(/\r?\n/).filter(Boolean).length;
     context?.workspaceActivity?.recordActivity({
       sessionId,
-      ...(context?.branchId !== undefined ? { branchId: context.branchId } : {}),
-      activityKind: "change",
+      ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
+      activityKind: "analysis",
       status: changedCount > 0 ? "info" : "completed",
       title: "Git workspace diff",
       message: changedCount > 0 ? `${changedCount} changed file(s)` : "Working tree is clean",

@@ -73,6 +73,19 @@ function isUnreadTriggerEvent(event: SessionEvent): boolean {
     event.type === "runtime_event";
 }
 
+function isWorkspaceActivityTriggerEvent(event: SessionEvent): boolean {
+  return event.type === "activity_event" ||
+    event.type === "artifact_pointer" ||
+    event.type === "diagnostic_event" ||
+    event.type === "diff_event" ||
+    event.type === "evidence_event" ||
+    event.type === "permission_grant_event" ||
+    event.type === "shell_task_event" ||
+    event.type === "todo_event" ||
+    event.type === "verification_event" ||
+    event.type === "worktree_event";
+}
+
 function mergeEvent(events: SessionEvent[], event: SessionEvent): SessionEvent[] {
   if (events.some((existing) => existing.seq === event.seq)) return events;
   return [...events, event].sort((a, b) => a.seq - b.seq);
@@ -80,6 +93,30 @@ function mergeEvent(events: SessionEvent[], event: SessionEvent): SessionEvent[]
 
 function eventBranchId(event: SessionEvent): string {
   return event.branchId ?? "main";
+}
+
+async function fetchThreadEventsUntil(
+  sessionId: string,
+  branchId: string,
+  afterSeq: number,
+  targetSeq: number,
+): Promise<SessionEvent[]> {
+  const events: SessionEvent[] = [];
+  let cursor = afterSeq;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const batch = await api.thread(sessionId, cursor, branchId);
+    if (batch.length === 0) break;
+    let nextCursor = cursor;
+    for (const event of batch) {
+      if (!events.some((existing) => existing.seq === event.seq)) {
+        events.push(event);
+      }
+      nextCursor = Math.max(nextCursor, event.seq);
+    }
+    if (nextCursor >= targetSeq || nextCursor === cursor) break;
+    cursor = nextCursor;
+  }
+  return events.sort((a, b) => a.seq - b.seq);
 }
 
 function branchIdForSession(state: DeviceState | null, session: Session | null): string {
@@ -221,6 +258,7 @@ export function App() {
   const [thread, setThread] = useState<SessionEvent[]>([]);
   const [branchState, setBranchState] = useState<SessionBranchState | null>(null);
   const [selectedBranchId, setSelectedBranchId] = useState("main");
+  const [workspaceActivity, setWorkspaceActivity] = useState<WorkspaceActivityState | null>(null);
   const [usage, setUsage] = useState<SessionUsageSummary | null>(null);
   const [deviceState, setDeviceState] = useState<DeviceState | null>(null);
   const [mainView, setMainView] = useState<MainView>("chat");
@@ -309,10 +347,16 @@ export function App() {
     () => buildRenderEvents(thread),
     [thread],
   );
-  const activity = useMemo(
-    () => buildWorkspaceActivityFromThread(thread, selected?.id ?? ""),
-    [thread, selected?.id],
-  );
+  const activity = useMemo(() => {
+    if (
+      workspaceActivity &&
+      workspaceActivity.sessionId === (selected?.id ?? "") &&
+      (workspaceActivity.branchId === undefined || workspaceActivity.branchId === selectedBranchId)
+    ) {
+      return workspaceActivity;
+    }
+    return buildWorkspaceActivityFromThread(thread, selected?.id ?? "", selectedBranchId);
+  }, [selected?.id, selectedBranchId, thread, workspaceActivity]);
   const deletableSessions = useMemo(
     () => sessions.filter((session) => (
       (!selectedProjectId || session.projectId === selectedProjectId) &&
@@ -538,6 +582,7 @@ export function App() {
       setThread([]);
       setBranchState(null);
       setSelectedBranchId("main");
+      setWorkspaceActivity(null);
       setUsage(null);
       stickToBottomRef.current = true;
       return;
@@ -549,13 +594,26 @@ export function App() {
       branches.activeBranchId ||
       session?.activeBranchId ||
       "main";
-    const [events, usageNext] = await Promise.all([
-      api.thread(sessionId, 0, branchId),
+    const initialTargetSeq = session?.latestSeq ?? 0;
+    let [events, usageNext, activityNext] = await Promise.all([
+      fetchThreadEventsUntil(sessionId, branchId, 0, initialTargetSeq),
       api.usage(sessionId).catch(() => null),
+      api.activity(sessionId, branchId).catch(() => null),
     ]);
+    const latestTargetSeq = Math.max(
+      initialTargetSeq,
+      sessionsRef.current.find((item) => item.id === sessionId)?.latestSeq ?? 0,
+    );
+    if (maxSeq(events) < latestTargetSeq) {
+      const more = await fetchThreadEventsUntil(sessionId, branchId, maxSeq(events), latestTargetSeq);
+      for (const event of more) {
+        events = mergeEvent(events, event);
+      }
+    }
     setBranchState(branches);
     setSelectedBranchId(branchId);
     setThread(events);
+    setWorkspaceActivity(activityNext ?? buildWorkspaceActivityFromThread(events, sessionId, branchId));
     setUsage(usageNext);
     stickToBottomRef.current = true;
     cursorRef.current = Math.max(cursorRef.current, maxSeq(events));
@@ -577,8 +635,12 @@ export function App() {
       deviceStateRef.current?.selectedBranchBySession?.[selectedSessionId] ||
       selectedSession.activeBranchId ||
       "main";
-    const afterSeq = maxSeq(threadRef.current);
-    const events = await api.thread(selectedSessionId, afterSeq, branchId);
+    let mergedThread = threadRef.current;
+    const afterSeq = maxSeq(mergedThread);
+    const events = await fetchThreadEventsUntil(selectedSessionId, branchId, afterSeq, selectedSession.latestSeq ?? 0);
+    for (const event of events) {
+      mergedThread = mergeEvent(mergedThread, event);
+    }
     if (events.length === 0) return;
 
     cursorRef.current = Math.max(cursorRef.current, maxSeq(events));
@@ -592,8 +654,19 @@ export function App() {
     if (events.some((event) => event.type === "usage_event" || event.type === "context_usage_event")) {
       void api.usage(selectedSessionId).then(setUsage).catch(() => undefined);
     }
+    if (events.some(isWorkspaceActivityTriggerEvent)) {
+      void api.activity(selectedSessionId, branchId)
+        .then(setWorkspaceActivity)
+        .catch(() => {
+          setWorkspaceActivity(buildWorkspaceActivityFromThread(
+            mergedThread,
+            selectedSessionId,
+            branchId,
+          ));
+        });
+    }
     if (stickToBottomRef.current) {
-      markSessionRead(selectedSessionId, maxSeq([...threadRef.current, ...events]));
+      markSessionRead(selectedSessionId, maxSeq(mergedThread));
     }
   }, [markSessionRead, reloadSessions]);
 
@@ -682,6 +755,17 @@ export function App() {
             const currentBranchId = selectedBranchIdRef.current || "main";
             if (eventBranchId(data.event) === currentBranchId) {
               setThread((current) => mergeEvent(current, data.event));
+              if (isWorkspaceActivityTriggerEvent(data.event)) {
+                void api.activity(data.sessionId, currentBranchId)
+                  .then(setWorkspaceActivity)
+                  .catch(() => {
+                    setWorkspaceActivity(buildWorkspaceActivityFromThread(
+                      mergeEvent(threadRef.current, data.event),
+                      data.sessionId,
+                      currentBranchId,
+                    ));
+                  });
+              }
               if (stickToBottomRef.current) {
                 markSessionRead(data.sessionId, data.event.seq);
               }
@@ -1036,6 +1120,7 @@ export function App() {
       const created = await api.createSession("New session", selectedProjectIdRef.current || undefined);
       await reloadSessions(created.id);
       setThread([]);
+      setWorkspaceActivity(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1059,6 +1144,7 @@ export function App() {
       else {
         setThread([]);
         setBranchState(null);
+        setWorkspaceActivity(null);
         setUsage(null);
       }
     } catch (err) {
@@ -1172,6 +1258,7 @@ export function App() {
         if (next) await loadThread(next);
         else {
           setThread([]);
+          setWorkspaceActivity(null);
           setUsage(null);
         }
       }
@@ -1198,6 +1285,7 @@ export function App() {
         if (next) await loadThread(next);
         else {
           setThread([]);
+          setWorkspaceActivity(null);
           setUsage(null);
         }
       }
@@ -1745,6 +1833,8 @@ export function App() {
             <ProviderSetup setup={setup} onSaved={setSetup} onError={setError} />
           ) : null}
 
+          <WorkReviewBanner activity={activity} onOpen={() => setRailPanel("activity")} />
+
           <div className="thread">
             {renderThread.length === 0 ? (
               <EmptyThread configured={setup?.provider.configured === true} />
@@ -1975,7 +2065,11 @@ function parseRailPanel(value: string | null): RailPanel | null {
   }
 }
 
-function buildWorkspaceActivityFromThread(events: SessionEvent[], sessionId: string): WorkspaceActivityState {
+function buildWorkspaceActivityFromThread(
+  events: SessionEvent[],
+  sessionId: string,
+  branchId?: string,
+): WorkspaceActivityState {
   const latestTodo = [...events].reverse().find((event): event is Extract<SessionEvent, { type: "todo_event" }> => event.type === "todo_event");
   const latestDiagnostics = [...events].reverse().find((event): event is Extract<SessionEvent, { type: "diagnostic_event" }> => event.type === "diagnostic_event");
   const changesByFile = new Map<string, WorkspaceActivityState["changes"][number]>();
@@ -1993,11 +2087,14 @@ function buildWorkspaceActivityFromThread(events: SessionEvent[], sessionId: str
   const worktree = [...events].reverse().find((event): event is Extract<SessionEvent, { type: "worktree_event" }> => event.type === "worktree_event");
   return {
     sessionId,
+    ...(branchId !== undefined ? { branchId } : {}),
     todos: latestTodo?.items ?? [],
     changes: [...changesByFile.values()].sort((a, b) => a.filePath.localeCompare(b.filePath)),
     diagnostics: latestDiagnostics?.diagnostics ?? [],
     checks: events.filter((event): event is Extract<SessionEvent, { type: "verification_event" }> => event.type === "verification_event").slice(-10),
+    evidence: events.filter((event): event is Extract<SessionEvent, { type: "evidence_event" }> => event.type === "evidence_event").slice(-20),
     shellTasks: events.filter((event): event is Extract<SessionEvent, { type: "shell_task_event" }> => event.type === "shell_task_event").slice(-20),
+    artifacts: events.filter((event): event is Extract<SessionEvent, { type: "artifact_pointer" }> => event.type === "artifact_pointer").slice(-20),
     ...(worktree !== undefined ? { worktree } : {}),
     permissionGrants: events.filter((event): event is Extract<SessionEvent, { type: "permission_grant_event" }> => event.type === "permission_grant_event").slice(-20),
     recent: events
@@ -3083,6 +3180,19 @@ function EventBlock(props: {
       </article>
     );
   }
+  if (event.type === "evidence_event") {
+    return (
+      <article className={`activity-card evidence ${event.status}`}>
+        <Meta label={`Evidence · ${event.status}`} time={event.timestamp} />
+        <p><strong>{event.step}</strong></p>
+        <p>{event.message}</p>
+        <p className="muted">
+          Receipt {event.evidenceId}
+          {event.matchedSeqs.length ? ` · matched #${event.matchedSeqs.join(", #")}` : ""}
+        </p>
+      </article>
+    );
+  }
   if (event.type === "shell_task_event") {
     return (
       <article className={`activity-card shell-task ${event.status}`}>
@@ -3265,6 +3375,139 @@ function HtmlPreviewCard({ path, sessionId }: { path: string; sessionId?: string
           </p>
         </>
       ) : null}
+    </section>
+  );
+}
+
+type WorkReviewModel = {
+  visible: boolean;
+  tone: "ok" | "warn" | "neutral";
+  label: string;
+  detail: string;
+  openTodos: number;
+  changedFiles: number;
+  additions: number;
+  deletions: number;
+  checks: number;
+  evidence: number;
+  runningTasks: number;
+};
+
+function latestWorkspaceReviewItem(activity: WorkspaceActivityState): WorkspaceActivityState["recent"][number] | undefined {
+  return [...activity.recent].reverse().find((item) =>
+    item.title === "Workspace review" || item.title === "Workspace final readiness gate"
+  );
+}
+
+function workReviewModel(activity: WorkspaceActivityState): WorkReviewModel {
+  const openTodos = activity.todos.filter((item) => item.status !== "completed" && item.status !== "cancelled").length;
+  const diagnosticErrors = activity.diagnostics.filter((item) => item.severity === "error").length;
+  const failedChecks = activity.checks.filter((check) => check.status === "failed").length;
+  const runningTasks = activity.shellTasks.filter((task) => task.status === "running").length;
+  const additions = activity.changes.reduce((total, change) => total + change.additions, 0);
+  const deletions = activity.changes.reduce((total, change) => total + change.deletions, 0);
+  const latestReview = latestWorkspaceReviewItem(activity);
+  const reviewPayload = latestReview?.payload ?? {};
+  const reviewReady = typeof reviewPayload.ready === "boolean" ? reviewPayload.ready : undefined;
+  const visible = openTodos > 0 ||
+    activity.changes.length > 0 ||
+    activity.checks.length > 0 ||
+    activity.evidence.length > 0 ||
+    activity.artifacts.length > 0 ||
+    diagnosticErrors > 0 ||
+    runningTasks > 0 ||
+    latestReview !== undefined;
+
+  if (reviewReady === false || diagnosticErrors > 0 || failedChecks > 0 || runningTasks > 0) {
+    return {
+      visible,
+      tone: "warn",
+      label: "Needs review",
+      detail: latestReview?.message ?? "There are unresolved workspace facts before finalizing.",
+      openTodos,
+      changedFiles: activity.changes.length,
+      additions,
+      deletions,
+      checks: activity.checks.length,
+      evidence: activity.evidence.length,
+      runningTasks,
+    };
+  }
+
+  if (reviewReady === true) {
+    return {
+      visible,
+      tone: "ok",
+      label: "Ready",
+      detail: latestReview?.message ?? "Workspace review found no unresolved issues.",
+      openTodos,
+      changedFiles: activity.changes.length,
+      additions,
+      deletions,
+      checks: activity.checks.length,
+      evidence: activity.evidence.length,
+      runningTasks,
+    };
+  }
+
+  if (activity.changes.length > 0 || openTodos > 0) {
+    return {
+      visible,
+      tone: "neutral",
+      label: openTodos > 0 ? "Work in progress" : "Changes pending",
+      detail: "Open Review Work for changed files, todos, checks, evidence, and artifacts.",
+      openTodos,
+      changedFiles: activity.changes.length,
+      additions,
+      deletions,
+      checks: activity.checks.length,
+      evidence: activity.evidence.length,
+      runningTasks,
+    };
+  }
+
+  return {
+    visible,
+    tone: "neutral",
+    label: activity.checks.length > 0 ? "Checks recorded" : "No work recorded",
+    detail: activity.checks.length > 0 ? "Verification history is available in Review Work." : "Workspace activity will appear here once tools start changing or checking files.",
+    openTodos,
+    changedFiles: activity.changes.length,
+    additions,
+    deletions,
+    checks: activity.checks.length,
+    evidence: activity.evidence.length,
+    runningTasks,
+  };
+}
+
+function WorkReviewBanner(props: {
+  activity: WorkspaceActivityState;
+  onOpen: () => void;
+}) {
+  const model = workReviewModel(props.activity);
+  if (!model.visible) return null;
+  return (
+    <section className={`work-review-banner tone-${model.tone}`} aria-label="Workspace review summary">
+      <div className="work-review-main">
+        <span className="work-review-dot" aria-hidden="true" />
+        <div>
+          <strong>{model.label}</strong>
+          <p>{model.detail}</p>
+        </div>
+      </div>
+      <div className="work-review-stats" aria-label="Workspace activity totals">
+        <span>{model.openTodos} todo</span>
+        <span>{model.changedFiles} files</span>
+        <span className="work-review-diff">
+          <b>+{model.additions}</b>
+          <b>-{model.deletions}</b>
+        </span>
+        <span>{model.checks} checks</span>
+        <span>{model.evidence} evidence</span>
+        {model.runningTasks > 0 ? <span>{model.runningTasks} running</span> : null}
+      </div>
+      <button type="button" onClick={props.onOpen}>Review work</button>
     </section>
   );
 }
@@ -3511,7 +3754,9 @@ function StatusDrawer(props: {
   const diagnosticErrors = props.activity.diagnostics.filter((item) => item.severity === "error").length;
   const failedChecks = props.activity.checks.filter((check) => check.status === "failed").length;
   const openTodos = props.activity.todos.filter((item) => item.status !== "completed" && item.status !== "cancelled").length;
-  const latestWorkspaceReview = [...props.activity.recent].reverse().find((item) => item.title === "Workspace review");
+  const latestWorkspaceReview = [...props.activity.recent].reverse().find((item) =>
+    item.title === "Workspace review" || item.title === "Workspace final readiness gate"
+  );
   const reviewPayload = latestWorkspaceReview?.payload ?? {};
   const reviewReady = typeof reviewPayload.ready === "boolean" ? reviewPayload.ready : undefined;
   const reviewIssues = Array.isArray(reviewPayload.issues)
@@ -3612,7 +3857,7 @@ function StatusDrawer(props: {
           <div className={`drawer-card review-summary ${reviewState === "Needs attention" ? "warn" : "ok"}`}>
             <strong>{reviewState}</strong>
             <p>
-              {openTodos} open todos · {props.activity.changes.length} changed files · {diagnosticErrors} errors · {failedChecks} failed checks
+              {openTodos} open todos · {props.activity.changes.length} changed files · {props.activity.evidence.length} evidence · {diagnosticErrors} errors · {failedChecks} failed checks · {props.activity.artifacts.length} artifacts
             </p>
             {latestWorkspaceReview ? <p>{latestWorkspaceReview.message}</p> : null}
             {reviewIssues.length > 0 ? (
@@ -3633,7 +3878,9 @@ function StatusDrawer(props: {
             ["Changed files", String(props.activity.changes.length)],
             ["Diagnostics", String(props.activity.diagnostics.length)],
             ["Checks", String(props.activity.checks.length)],
+            ["Evidence", String(props.activity.evidence.length)],
             ["Tasks", String(props.activity.shellTasks.length)],
+            ["Artifacts", String(props.activity.artifacts.length)],
           ]} />
           {props.activity.worktree ? (
             <div className="drawer-card">
@@ -3672,12 +3919,34 @@ function StatusDrawer(props: {
               ))}
             </div>
           ) : null}
+          {props.activity.evidence.length > 0 ? (
+            <div className="drawer-card">
+              <strong>Evidence</strong>
+              {props.activity.evidence.slice(-6).map((item) => (
+                <p key={item.evidenceId}>
+                  <span>{item.status}</span> {item.step}
+                  <br />
+                  Receipt {item.evidenceId}{item.matchedSeqs.length ? ` · #${item.matchedSeqs.join(", #")}` : ""}
+                </p>
+              ))}
+            </div>
+          ) : null}
           {props.activity.diagnostics.length > 0 ? (
             <div className="drawer-card">
               <strong>Diagnostics</strong>
               {props.activity.diagnostics.slice(0, 6).map((diagnostic, index) => (
                 <p key={`${diagnostic.filePath ?? "diagnostic"}-${index}`}>
                   <span>{diagnostic.severity}</span> {diagnostic.filePath ?? "workspace"}{diagnostic.line ? `:${diagnostic.line}` : ""} {diagnostic.code ?? ""} {diagnostic.message}
+                </p>
+              ))}
+            </div>
+          ) : null}
+          {props.activity.artifacts.length > 0 ? (
+            <div className="drawer-card">
+              <strong>Artifacts</strong>
+              {props.activity.artifacts.slice(-6).map((artifact) => (
+                <p key={`${artifact.artifactId}-${artifact.seq}`}>
+                  <span>{artifact.mimeType}</span> {artifact.artifactId} · {compactNumber(artifact.sizeBytes)} bytes
                 </p>
               ))}
             </div>
@@ -3698,7 +3967,7 @@ function StatusDrawer(props: {
               ))}
             </div>
           ) : null}
-          {props.activity.todos.length === 0 && props.activity.changes.length === 0 && props.activity.checks.length === 0 && props.activity.diagnostics.length === 0 && props.activity.recent.length === 0 ? (
+          {props.activity.todos.length === 0 && props.activity.changes.length === 0 && props.activity.checks.length === 0 && props.activity.evidence.length === 0 && props.activity.diagnostics.length === 0 && props.activity.artifacts.length === 0 && props.activity.recent.length === 0 ? (
             <p className="drawer-empty">No workspace activity recorded for this session yet.</p>
           ) : null}
         </div>

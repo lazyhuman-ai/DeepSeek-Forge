@@ -12,6 +12,16 @@ ForgeAgent is a local-first workspace agent. It is not a pure coding CLI, not a 
 - Permissions should interrupt only for dangerous or meaningfully irreversible actions.
 - MCP, browser, files, terminal, skills, memory, artifacts, usage, Blender, research, and automation must all compose through the same workspace activity model.
 
+## Implementation Discipline
+
+Large capability upgrades should move the product across multiple core dimensions before a test round. Do not spend expensive verification cycles on tiny isolated fragments when the agreed target is a deep capability jump.
+
+When a plan explicitly says the implementation round must not run tests, do not run tests, builds, release gates, or benchmark commands in that round. Use static inspection and code review only; the user will open a separate verification round.
+
+If Reasonix, Claude Code, opencode, OpenClaw, Hermes, or another referenced implementation already has a mature mechanism for the target capability, adapt that mechanism directly into ForgeAgent's architecture instead of rebuilding a lower-quality substitute from scratch.
+
+New capability should be final-shape design. Avoid temporary names, fake gates, prompt-only substitutes for host guarantees, or MVP behavior that is known to require replacement.
+
 ## WorkspaceActivity
 
 `WorkspaceActivity` is a state-recording layer, not an executor. It records plans, todos, changed files, structured diffs, diagnostics, verification results, background tasks, worktree facts, permission grants, recent failures, and artifacts for `projectId + sessionId + branchId`.
@@ -36,7 +46,17 @@ These capabilities also benefit documents, reports, browser tasks, MCP tools, Bl
 
 Completion is evidence-based. After changing workspace files or artifacts, the Agent should use durable activity facts and `workspace_review` to check for open todos, unverified diffs, failed checks, stale diagnostics, and still-running tasks before claiming the work is done.
 
-Subagents are workspace primitives, not a second product line. A read-only `agent_task` can ask the current model to verify, explore, or plan from durable thread facts and constrained read/search/LSP/git-diff/verification tools, but it does not get its own permission system, project store, runtime, editing authority, or hidden workspace authority.
+Final readiness is host-owned. `workspace_review` remains a useful explicit tool, but AgentLoop must also run a final readiness gate before sending a final assistant answer. If durable activity facts show open work, stale checks, missing evidence, required host checks, running tasks, or failed diagnostics, the host writes a readable event back into the thread and the Agent continues. This cannot be delegated to prompt discipline alone.
+
+Todo completion is receipt-based. A todo is not complete just because the model says it is; newly completed todos need a `complete_step` evidence receipt tied to real diff, verification, diagnostics, subagent verdict, files, or manual user confirmation facts.
+
+Project host checks are durable constraints. A project may declare safe `verify: <command>` checks in its guidance files. These checks are part of readiness after workspace changes and should not be injected as large mutable prompt text.
+
+Deep code intelligence should use CodeGraph-class semantic tools when available. Lightweight `code_map` and `dependency_graph` are fallback maps; cross-file call graph, impact analysis, symbol context, and architecture trace belong to CodeGraph plus LSP.
+
+DeepSeek cache stability is a product constraint. System prompts, tool schemas, memory manifests, skills, extensions, and MCP catalogs should remain prefix-stable where possible. Usage events should expose cache hit/miss and prefix-change reasons so cache churn is diagnosable rather than mysterious.
+
+Subagents are workspace primitives, not a second product line. `agent_task` can ask the current model to verify, explore, plan, or handle a bounded implementation subtask from durable thread facts and constrained workspace tools. Implementation subagents may edit only through the same ForgeAgent read/edit/todo/diff/verification/worktree tools, PermissionBroker, and PathSandbox as the main Agent. They do not get their own permission system, project store, runtime, browser/MCP/extension authority, user-prompt channel, or hidden workspace authority. Isolated implementation should stay in the explicit workspace tool chain: `enter_worktree`, bounded edits, `verify_workspace`, `git_diff`, `workspace_review`, `commit_worktree`, then `merge_worktree`.
 
 Verification subagents should be skeptical. Missing, stale, narrow, or intention-only evidence is not proof. A `PASS` verdict requires current task-relevant evidence; otherwise the result should be `PARTIAL` or `FAIL` with concrete next actions.
 

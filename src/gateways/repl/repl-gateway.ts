@@ -563,6 +563,7 @@ function eventLabel(e: SessionEvent): string {
     case "assistant_delta": return `${GRN}DLTA ${R}`;
     case "usage_event": return `${D}USGE ${R}`;
     case "context_usage_event": return `${D}CTX  ${R}`;
+    case "evidence_event": return `${D}EVID ${R}`;
     case "tool_call": return `${YLW}TOOL ${R}`;
     case "tool_result": return e.isError ? `${RED}RSLT ${R}` : `${D}RSLT ${R}`;
     case "compaction_block": return `${D}CMPT ${R}`;
@@ -587,6 +588,7 @@ function eventContent(e: SessionEvent, max: number): string {
     case "assistant_delta": return truncate(e.text, max);
     case "usage_event": return truncate(e.message, max);
     case "context_usage_event": return truncate(e.message, max);
+    case "evidence_event": return `${e.status} ${e.step}: ${truncate(e.message, max)}`;
     case "tool_call": return `${e.toolName}(${truncate(JSON.stringify(e.args), max - e.toolName.length - 2)})`;
     case "tool_result": return truncate(String(e.result), max);
     case "compaction_block": return `covers #${e.coversEvents[0]}–#${e.coversEvents[1]}: ${truncate(e.summary, max - 20)}`;

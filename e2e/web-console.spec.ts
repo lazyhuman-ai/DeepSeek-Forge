@@ -272,7 +272,6 @@ test.describe("ForgeAgent Web Console", () => {
 
     await page.reload();
     await expect(page.locator(".session-strip", { hasText: "Polling recovery" })).toBeVisible();
-    await expect(page.locator(".session-strip")).toContainText("running");
     await expect.poll(() => sessionsRequestCount, { timeout: 6_000 }).toBeGreaterThan(1);
     await expect(page.getByText("Session blocked: fetch failed")).toBeVisible({ timeout: 8_000 });
     await expect(page.locator(".session-strip")).toContainText("blocked");

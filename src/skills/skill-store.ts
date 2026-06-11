@@ -8,6 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createHash, createPublicKey, randomUUID, verify } from "node:crypto";
 import { homedir, platform } from "node:os";
 import {
@@ -732,12 +733,111 @@ export class SkillStore {
     this.#projectRoot = resolved;
     const timestamp = this.#now();
     const projectSources = defaultSources(this.rootDir, this.#projectRoot, timestamp)
-      .filter((source) => source.id === "project-skills" || source.id === "project-agents-skills");
+      .filter((source) => (
+        source.id === "project-skills" ||
+        source.id === "project-forge-skills" ||
+        source.id === "project-claude-skills" ||
+        source.id === "project-agents-skills"
+      ));
     const byId = new Map(this.#state.sources.map((source) => [source.id, source]));
     for (const source of projectSources) byId.set(source.id, source);
     this.#state.sources = [...byId.values()];
     this.#saveState();
     this.rebuildIndex();
+  }
+
+  activateForTouchedPaths(filePaths: string[], options?: { sessionId?: string }): SkillEventRecord[] {
+    const touched = filePaths
+      .map((filePath) => resolve(filePath))
+      .filter((filePath) => isInside(filePath, this.#projectRoot));
+    if (touched.length === 0) return [];
+
+    const emitted: SkillEventRecord[] = [];
+    const addedSources = this.#addDynamicSourcesForTouchedPaths(touched);
+    if (addedSources.length > 0) {
+      this.#saveState();
+      this.rebuildIndex();
+      const key = `sources:${addedSources.map((source) => source.id).sort().join(",")}`;
+      if (!this.#hasDynamicEvent(options?.sessionId, key)) {
+        emitted.push(this.#appendEvent("dynamic_loaded", {
+          ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+          message: `Discovered ${addedSources.length} local skill source(s) near touched workspace paths.`,
+          source: "project",
+          payload: {
+            dynamicActivationKey: key,
+            sources: addedSources.map((source) => ({
+              id: source.id,
+              name: source.name,
+              path: source.path,
+            })),
+          },
+        }));
+      }
+    }
+
+    const relativePaths = touched
+      .map((filePath) => toPortable(relative(this.#projectRoot, filePath)))
+      .filter((filePath) => filePath && !filePath.startsWith(".."));
+    const matched = this.list()
+      .filter((skill) => skill.paths?.length && matchesAnyPath(skill.paths, relativePaths));
+
+    for (const skill of matched) {
+      const key = `skill:${skill.packageId}:${relativePaths.join("|")}`;
+      if (this.#hasDynamicEvent(options?.sessionId, key)) continue;
+      emitted.push(this.#appendEvent("dynamic_loaded", {
+        ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+        skillName: skill.name,
+        packageId: skill.packageId,
+        status: skill.status,
+        trust: skill.trust,
+        source: skill.source,
+        message: `Skill ${skill.name} became relevant after touched path(s): ${relativePaths.join(", ")}.`,
+        payload: {
+          dynamicActivationKey: key,
+          matchedPaths: relativePaths,
+          patterns: skill.paths,
+          location: skill.location,
+        },
+      }));
+    }
+    return emitted;
+  }
+
+  #hasDynamicEvent(sessionId: string | undefined, key: string): boolean {
+    return this.#events.some((event) => (
+      event.action === "dynamic_loaded" &&
+      event.sessionId === (sessionId ?? "system") &&
+      event.payload?.dynamicActivationKey === key
+    ));
+  }
+
+  #addDynamicSourcesForTouchedPaths(filePaths: string[]): SkillSource[] {
+    const now = this.#now();
+    const existing = new Map(this.#state.sources.map((source) => [source.id, source]));
+    const added: SkillSource[] = [];
+    for (const filePath of filePaths) {
+      for (const root of dynamicSkillRootsForPath(this.#projectRoot, filePath)) {
+        if (!existsSync(root)) continue;
+        const id = `dynamic-${shortHash(root)}`;
+        if (existing.has(id)) continue;
+        const source: SkillSource = {
+          id,
+          kind: "project",
+          name: `Local skills near ${toPortable(relative(this.#projectRoot, dirname(root))) || "."}`,
+          enabled: true,
+          path: root,
+          trust: "project",
+          addedAt: now,
+          updatedAt: now,
+        };
+        existing.set(id, source);
+        added.push(source);
+      }
+    }
+    if (added.length > 0) {
+      this.#state.sources = [...existing.values()];
+    }
+    return added;
   }
 
   #ensureLayout(): void {
@@ -1177,6 +1277,26 @@ function defaultSources(rootDir: string, projectRoot: string, timestamp: string)
       updatedAt: timestamp,
     },
     {
+      id: "project-forge-skills",
+      kind: "project",
+      name: "Project .forge skills",
+      enabled: true,
+      path: join(projectRoot, ".forge", "skills"),
+      trust: "project",
+      addedAt: timestamp,
+      updatedAt: timestamp,
+    },
+    {
+      id: "project-claude-skills",
+      kind: "project",
+      name: "Project .claude skills",
+      enabled: true,
+      path: join(projectRoot, ".claude", "skills"),
+      trust: "project",
+      addedAt: timestamp,
+      updatedAt: timestamp,
+    },
+    {
       id: "project-agents-skills",
       kind: "project",
       name: "Project .agents skills",
@@ -1355,6 +1475,10 @@ function appendJsonl(filePath: string, value: unknown): void {
   writeFileSync(filePath, `${JSON.stringify(value)}\n`, { flag: "a" });
 }
 
+function shortHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
+
 function readJsonIfExists(filePath: string): unknown | null {
   if (!existsSync(filePath)) return null;
   return JSON.parse(readFileSync(filePath, "utf-8")) as unknown;
@@ -1390,10 +1514,37 @@ function pathPatternMatches(pattern: string, filePath: string): boolean {
   const normalized = pattern.replaceAll("\\", "/").replace(/\/\*\*$/, "");
   if (normalized === "**" || normalized === "*") return true;
   if (normalized.includes("*")) {
-    const regex = new RegExp(`^${normalized.split("*").map(escapeRegex).join(".*")}`);
-    return regex.test(filePath);
+    return globPatternToRegExp(normalized).test(filePath);
   }
   return filePath === normalized || filePath.startsWith(`${normalized}/`) || filePath.includes(`/${normalized}/`);
+}
+
+function globPatternToRegExp(pattern: string): RegExp {
+  let out = "^";
+  for (let index = 0; index < pattern.length;) {
+    const char = pattern[index]!;
+    const next = pattern[index + 1];
+    const afterNext = pattern[index + 2];
+    if (char === "*" && next === "*" && afterNext === "/") {
+      out += "(?:.*/)?";
+      index += 3;
+      continue;
+    }
+    if (char === "*" && next === "*") {
+      out += ".*";
+      index += 2;
+      continue;
+    }
+    if (char === "*") {
+      out += "[^/]*";
+      index += 1;
+      continue;
+    }
+    out += escapeRegex(char);
+    index += 1;
+  }
+  out += "$";
+  return new RegExp(out);
 }
 
 function scoreSkill(skill: SkillManifest, latestUserText: string, recentPaths: string[]): number {
@@ -1422,6 +1573,57 @@ function scoreSkill(skill: SkillManifest, latestUserText: string, recentPaths: s
 
 function toPortable(filePath: string): string {
   return filePath.split(sep).join("/");
+}
+
+function dynamicSkillRootsForPath(projectRoot: string, filePath: string): string[] {
+  const roots: string[] = [];
+  let current = dirname(filePath);
+  const resolvedProject = resolve(projectRoot);
+  while (isInside(current, resolvedProject)) {
+    for (const subdir of [[".forge", "skills"], [".claude", "skills"]] as const) {
+      const candidate = join(current, ...subdir);
+      if (isSafeDynamicSkillRoot(candidate, resolvedProject)) roots.push(candidate);
+    }
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return [...new Set(roots)];
+}
+
+function isSafeDynamicSkillRoot(skillRoot: string, projectRoot: string): boolean {
+  const resolvedSkillRoot = resolve(skillRoot);
+  if (!isInside(resolvedSkillRoot, projectRoot)) return false;
+  if (isPathGitignored(projectRoot, resolvedSkillRoot)) return false;
+  const segments = relative(projectRoot, skillRoot).split(sep).filter(Boolean);
+  return !segments.some((segment) => (
+    segment === "node_modules" ||
+    segment === "vendor" ||
+    segment === ".git" ||
+    segment === ".next" ||
+    segment === "dist" ||
+    segment === "build"
+  ));
+}
+
+function isPathGitignored(projectRoot: string, filePath: string): boolean {
+  try {
+    execFileSync("git", ["check-ignore", "-q", "--", relative(projectRoot, filePath)], {
+      cwd: projectRoot,
+      stdio: "ignore",
+      timeout: 1000,
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_ASKPASS: "true",
+        SSH_ASKPASS: "true",
+      },
+    });
+    return true;
+  } catch (error) {
+    const status = (error as { status?: number }).status;
+    return status === 0;
+  }
 }
 
 function isInside(filePath: string, root: string): boolean {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { exec, execSync, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import { join } from "node:path";
 import type { ExecutableToolDefinition } from "../schemas.js";
 import { buildTool } from "../schemas.js";
 import type { ToolExecutionContext } from "../../agent/tool-executor.js";
@@ -18,7 +19,7 @@ const execPromise = promisify(exec);
 
 const DEFAULT_TIMEOUT = 120_000;
 const MAX_TIMEOUT = 600_000;
-const MAX_OUTPUT_LENGTH = 30_000;
+const MAX_OUTPUT_LENGTH = 120_000;
 const DEFAULT_STALL_THRESHOLD_MS = 45_000;
 const DEFAULT_AUTO_BACKGROUND_AFTER_MS = 15_000;
 const STALL_TAIL_CHARS = 1_200;
@@ -33,12 +34,17 @@ const PROMPT_PATTERNS = [
   /(?:password|passphrase|token|otp|verification code)\s*:\s*$/i,
 ];
 
+type BoundedCommandOutput = {
+  display: string;
+  diagnostic: string;
+};
+
 function truncateOutput(stdout: string, stderr: string): string {
   let result = "";
   if (stdout) {
     if (stdout.length > MAX_OUTPUT_LENGTH) {
-      result += `[stdout truncated: ${stdout.length} chars, showing last ${MAX_OUTPUT_LENGTH}]\n`;
-      result += stdout.slice(-MAX_OUTPUT_LENGTH);
+      result += `[large stdout: ${stdout.length} chars; complete stdout follows and may be artifactized by ForgeAgent]\n`;
+      result += stdout;
     } else {
       result += stdout;
     }
@@ -46,13 +52,20 @@ function truncateOutput(stdout: string, stderr: string): string {
   if (stderr) {
     if (result) result += "\n";
     if (stderr.length > MAX_OUTPUT_LENGTH) {
-      result += `[stderr truncated: ${stderr.length} chars, showing last ${MAX_OUTPUT_LENGTH}]\n`;
-      result += stderr.slice(-MAX_OUTPUT_LENGTH);
+      result += `[large stderr: ${stderr.length} chars; complete stderr follows and may be artifactized by ForgeAgent]\n`;
+      result += stderr;
     } else {
       result += stderr;
     }
   }
   return result || "(no output)";
+}
+
+function boundedCommandOutput(stdout: string, stderr = ""): BoundedCommandOutput {
+  return {
+    display: truncateOutput(stdout, stderr),
+    diagnostic: [stdout, stderr].filter(Boolean).join("\n"),
+  };
 }
 
 function shellQuote(value: string): string {
@@ -149,6 +162,23 @@ function outputSummary(output: string): string {
   return compact.length <= 240 ? compact : `${compact.slice(0, 239).trim()}…`;
 }
 
+function safeSessionId(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || "session";
+}
+
+function shellTaskRoot(context: ToolExecutionContext | undefined, sessionId: string): string {
+  const dataDir = context?.dataDir ?? join(context?.projectRoot ?? process.cwd(), ".forge");
+  return join(dataDir, "shell-tasks", safeSessionId(sessionId));
+}
+
+function shellTaskStatePath(context: ToolExecutionContext | undefined, sessionId: string, taskId: string): string {
+  return join(shellTaskRoot(context, sessionId), `${taskId}.json`);
+}
+
+function shellTaskOutputPath(context: ToolExecutionContext | undefined, sessionId: string, taskId: string): string {
+  return join(shellTaskRoot(context, sessionId), `${taskId}.txt`);
+}
+
 function stallThresholdMs(): number {
   const raw = Number(process.env.FORGE_SHELL_STALL_MS);
   if (Number.isFinite(raw) && raw >= 100) return raw;
@@ -220,6 +250,87 @@ function startStallWatchdog(input: {
 
 const TSC_DIAGNOSTIC_RE = /^(.*)\((\d+),(\d+)\):\s+(error|warning)\s+(TS\d+):\s+(.*)$/;
 const TSC_PRETTY_DIAGNOSTIC_RE = /^(.*):(\d+):(\d+)\s+-\s+(error|warning)\s+(TS\d+):\s+(.*)$/;
+
+type WorkspaceChangeSnapshot = {
+  root: string;
+  raw: string;
+  files: Set<string>;
+};
+
+function parseGitStatusFiles(raw: string): Set<string> {
+  const files = new Set<string>();
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const pathPart = line.slice(3).trim();
+    if (!pathPart) continue;
+    const renameParts = pathPart.split(" -> ");
+    for (const part of renameParts) {
+      const cleaned = part.replace(/^"|"$/g, "");
+      if (cleaned) files.add(cleaned);
+    }
+  }
+  return files;
+}
+
+async function workspaceChangeSnapshot(
+  context: ToolExecutionContext | undefined,
+): Promise<WorkspaceChangeSnapshot | null> {
+  const cwd = context?.projectRoot ?? process.cwd();
+  try {
+    const rootResult = await execPromise("git rev-parse --show-toplevel", {
+      cwd,
+      shell: "/bin/bash",
+      timeout: 5_000,
+      signal: context?.signal,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    const root = rootResult.stdout.trim();
+    if (!root) return null;
+    const status = await execPromise("git status --porcelain=v1", {
+      cwd: root,
+      shell: "/bin/bash",
+      timeout: 5_000,
+      signal: context?.signal,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    return {
+      root,
+      raw: status.stdout,
+      files: parseGitStatusFiles(status.stdout),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function recordShellWorkspaceChanges(input: {
+  before: WorkspaceChangeSnapshot | null;
+  sessionId: string;
+  branchId?: string;
+  command: string;
+  context?: ToolExecutionContext;
+}): Promise<void> {
+  if (!input.before || input.context?.signal?.aborted) return;
+  const after = await workspaceChangeSnapshot(input.context);
+  if (!after || after.root !== input.before.root || after.raw === input.before.raw) return;
+  const files = new Set([...input.before.files, ...after.files]);
+  input.context?.workspaceActivity?.recordActivity({
+    sessionId: input.sessionId,
+    ...(input.branchId !== undefined ? { branchId: input.branchId } : {}),
+    activityKind: "change",
+    status: "completed",
+    title: "Shell command changed workspace",
+    message: `Command changed git status for ${files.size} file(s): ${input.command}`,
+    payload: {
+      root: after.root,
+      command: input.command,
+      beforeDirtyFiles: input.before.files.size,
+      afterDirtyFiles: after.files.size,
+      files: [...files].slice(0, 80),
+      truncated: files.size > 80,
+    },
+  });
+}
 
 function parseVerificationDiagnostics(output: string): Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
@@ -328,6 +439,7 @@ async function runForegroundWithAutoBackground(input: {
   sessionId: string;
   context?: ToolExecutionContext;
 }): Promise<unknown> {
+  const beforeWorkspace = await workspaceChangeSnapshot(input.context);
   return await new Promise<unknown>((resolvePromise) => {
     let foregroundOutput = "";
     let taskId: string | undefined;
@@ -371,15 +483,17 @@ async function runForegroundWithAutoBackground(input: {
       createShellTask({
         taskId,
         sessionId: input.sessionId,
-        ...(input.context?.branchId !== undefined ? { branchId: input.context.branchId } : {}),
+        ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
         command: input.command,
         ...(input.description !== undefined ? { description: input.description } : {}),
+        outputFile: shellTaskOutputPath(input.context, input.sessionId, taskId),
+        stateFile: shellTaskStatePath(input.context, input.sessionId, taskId),
         child,
       });
       if (foregroundOutput) appendShellTaskOutput(taskId, foregroundOutput);
       input.context?.workspaceActivity?.recordShellTask({
         sessionId: input.sessionId,
-        ...(input.context?.branchId !== undefined ? { branchId: input.context.branchId } : {}),
+        ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
         taskId,
         action: "started",
         command: input.command,
@@ -390,7 +504,7 @@ async function runForegroundWithAutoBackground(input: {
       stopStallWatchdog = startStallWatchdog({
         taskId,
         sessionId: input.sessionId,
-        ...(input.context?.branchId !== undefined ? { branchId: input.context.branchId } : {}),
+        ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
         command: input.command,
         ...(input.description !== undefined ? { description: input.description } : {}),
         ...(input.context !== undefined ? { context: input.context } : {}),
@@ -398,6 +512,7 @@ async function runForegroundWithAutoBackground(input: {
       resolveOnce([
         `Command is still running and was moved to the background after ${input.autoBackgroundAfterMs}ms: ${input.description ?? input.command}`,
         `Task: ${taskId}`,
+        `Output file: ${shellTaskOutputPath(input.context, input.sessionId, taskId)}`,
         "Use task_output with this task_id to inspect progress, or task_kill to stop it.",
       ].join("\n"));
     };
@@ -420,12 +535,19 @@ async function runForegroundWithAutoBackground(input: {
       clearTimeout(autoTimer);
       clearTimeout(timeoutTimer);
       stopStallWatchdog?.();
+      void recordShellWorkspaceChanges({
+        before: beforeWorkspace,
+        sessionId: input.sessionId,
+        ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
+        command: input.command,
+        ...(input.context !== undefined ? { context: input.context } : {}),
+      });
       if (taskId) {
         appendShellTaskOutput(taskId, `\n${error.message}`);
         const snapshot = finishShellTask(taskId, "failed");
         recordBashVerification({
           sessionId: input.sessionId,
-          ...(input.context?.branchId !== undefined ? { branchId: input.context.branchId } : {}),
+          ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
           command: input.command,
           status: "failed",
           output: snapshot?.output ?? error.message,
@@ -433,7 +555,7 @@ async function runForegroundWithAutoBackground(input: {
         });
         input.context?.workspaceActivity?.recordShellTask({
           sessionId: input.sessionId,
-          ...(input.context?.branchId !== undefined ? { branchId: input.context.branchId } : {}),
+          ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
           taskId,
           action: "failed",
           command: input.command,
@@ -450,13 +572,20 @@ async function runForegroundWithAutoBackground(input: {
       clearTimeout(autoTimer);
       clearTimeout(timeoutTimer);
       stopStallWatchdog?.();
+      void recordShellWorkspaceChanges({
+        before: beforeWorkspace,
+        sessionId: input.sessionId,
+        ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
+        command: input.command,
+        ...(input.context !== undefined ? { context: input.context } : {}),
+      });
       if (taskId) {
         const status = timedOut ? "failed" : signal === "SIGTERM" ? "killed" : code === 0 ? "completed" : "failed";
         const snapshot = finishShellTask(taskId, status, code ?? undefined);
         if (status === "completed" || status === "failed") {
           recordBashVerification({
             sessionId: input.sessionId,
-            ...(input.context?.branchId !== undefined ? { branchId: input.context.branchId } : {}),
+            ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
             command: input.command,
             status: status === "completed" ? "passed" : "failed",
             ...(code !== null ? { exitCode: code } : {}),
@@ -466,7 +595,7 @@ async function runForegroundWithAutoBackground(input: {
         }
         input.context?.workspaceActivity?.recordShellTask({
           sessionId: input.sessionId,
-          ...(input.context?.branchId !== undefined ? { branchId: input.context.branchId } : {}),
+          ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
           taskId,
           action: status === "completed" ? "completed" : status,
           command: input.command,
@@ -480,20 +609,20 @@ async function runForegroundWithAutoBackground(input: {
         return;
       }
 
-      const output = truncateOutput(foregroundOutput, "");
+      const output = boundedCommandOutput(foregroundOutput, "");
       const exitCode = code ?? undefined;
       if (timedOut || signal) {
         recordBashVerification({
           sessionId: input.sessionId,
-          ...(input.context?.branchId !== undefined ? { branchId: input.context.branchId } : {}),
+          ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
           command: input.command,
           status: "failed",
           ...(exitCode !== undefined ? { exitCode } : {}),
-          output,
+          output: output.diagnostic,
           ...(input.context !== undefined ? { context: input.context } : {}),
         });
         resolveOnce({
-          output: `Command failed: command was ${timedOut ? "killed after timeout" : `terminated by signal ${signal}`}.\n${output}`,
+          output: `Command failed: command was ${timedOut ? "killed after timeout" : `terminated by signal ${signal}`}.\n${output.display}`,
           isError: true,
         });
         return;
@@ -501,34 +630,34 @@ async function runForegroundWithAutoBackground(input: {
       if (code === 0) {
         recordBashVerification({
           sessionId: input.sessionId,
-          ...(input.context?.branchId !== undefined ? { branchId: input.context.branchId } : {}),
+          ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
           command: input.command,
           status: "passed",
           exitCode: 0,
-          output,
+          output: output.diagnostic,
           ...(input.context !== undefined ? { context: input.context } : {}),
         });
-        resolveOnce(output);
+        resolveOnce(output.display);
         return;
       }
       const semantic = nonErrorExitExplanation(input.command, exitCode);
       if (semantic && !verificationCommand(input.command)) {
-        resolveOnce(`${semantic}\n${output}`);
+        resolveOnce(`${semantic}\n${output.display}`);
         return;
       }
       if (verificationCommand(input.command)) {
         recordBashVerification({
           sessionId: input.sessionId,
-          ...(input.context?.branchId !== undefined ? { branchId: input.context.branchId } : {}),
+          ...(input.context?.branchId !== undefined ? { branchId: input.context?.branchId } : {}),
           command: input.command,
           status: "failed",
           ...(exitCode !== undefined ? { exitCode } : {}),
-          output,
+          output: output.diagnostic,
           ...(input.context !== undefined ? { context: input.context } : {}),
         });
       }
       resolveOnce({
-        output: `Command failed: exit code ${code ?? "unknown"}.\n${output}`,
+        output: `Command failed: exit code ${code ?? "unknown"}.\n${output.display}`,
         isError: true,
       });
     });
@@ -556,6 +685,7 @@ async function handler(
 
   if (runInBackground) {
     const taskId = `task_${randomUUID().slice(0, 8)}`;
+    const beforeWorkspace = await workspaceChangeSnapshot(context);
     const child = spawn("/bin/bash", ["-lc", sandboxed.command], {
       cwd: context?.projectRoot ?? process.cwd(),
       signal: context?.signal,
@@ -581,14 +711,16 @@ async function handler(
     createShellTask({
       taskId,
       sessionId,
-      ...(context?.branchId !== undefined ? { branchId: context.branchId } : {}),
+      ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
       command,
       ...(description !== undefined ? { description } : {}),
+      outputFile: shellTaskOutputPath(context, sessionId, taskId),
+      stateFile: shellTaskStatePath(context, sessionId, taskId),
       child,
     });
     context?.workspaceActivity?.recordShellTask({
       sessionId,
-      ...(context.branchId !== undefined ? { branchId: context.branchId } : {}),
+      ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
       taskId,
       action: "started",
       command,
@@ -598,7 +730,7 @@ async function handler(
     const stopStallWatchdog = startStallWatchdog({
       taskId,
       sessionId,
-      ...(context?.branchId !== undefined ? { branchId: context.branchId } : {}),
+      ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
       command,
       ...(description !== undefined ? { description } : {}),
       ...(context !== undefined ? { context } : {}),
@@ -615,11 +747,18 @@ async function handler(
     child.on("error", (error) => {
       clearTimeout(timeoutTimer);
       stopStallWatchdog();
+      void recordShellWorkspaceChanges({
+        before: beforeWorkspace,
+        sessionId,
+        ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
+        command,
+        ...(context !== undefined ? { context } : {}),
+      });
       appendShellTaskOutput(taskId, `\n${error.message}`);
       const snapshot = finishShellTask(taskId, "failed");
       recordBashVerification({
         sessionId,
-        ...(context?.branchId !== undefined ? { branchId: context.branchId } : {}),
+        ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
         command,
         status: "failed",
         output: snapshot?.output ?? error.message,
@@ -627,7 +766,7 @@ async function handler(
       });
       context?.workspaceActivity?.recordShellTask({
         sessionId,
-        ...(context.branchId !== undefined ? { branchId: context.branchId } : {}),
+        ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
         taskId,
         action: "failed",
         command,
@@ -639,12 +778,19 @@ async function handler(
     child.on("exit", (code, signal) => {
       clearTimeout(timeoutTimer);
       stopStallWatchdog();
+      void recordShellWorkspaceChanges({
+        before: beforeWorkspace,
+        sessionId,
+        ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
+        command,
+        ...(context !== undefined ? { context } : {}),
+      });
       const status = timedOut ? "failed" : signal === "SIGTERM" ? "killed" : code === 0 ? "completed" : "failed";
       const snapshot = finishShellTask(taskId, status, code ?? undefined);
       if (status === "completed" || status === "failed") {
         recordBashVerification({
           sessionId,
-          ...(context?.branchId !== undefined ? { branchId: context.branchId } : {}),
+          ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
           command,
           status: status === "completed" ? "passed" : "failed",
           ...(code !== null ? { exitCode: code } : {}),
@@ -654,7 +800,7 @@ async function handler(
       }
       context?.workspaceActivity?.recordShellTask({
         sessionId,
-        ...(context.branchId !== undefined ? { branchId: context.branchId } : {}),
+        ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
         taskId,
         action: status === "completed" ? "completed" : status,
         command,
@@ -667,7 +813,12 @@ async function handler(
       });
     });
 
-    return `Command started in background: ${description ?? command}\nTask: ${taskId}\nUse task_output with task_id=${taskId} to read output, or task_kill to stop it.`;
+    return [
+      `Command started in background: ${description ?? command}`,
+      `Task: ${taskId}`,
+      `Output file: ${shellTaskOutputPath(context, sessionId, taskId)}`,
+      "Use task_output with task_id to read output, or task_kill to stop it.",
+    ].join("\n");
   }
 
   const autoBackgroundMs = autoBackgroundAfterMs(args);
@@ -683,6 +834,7 @@ async function handler(
     });
   }
 
+  const beforeWorkspace = await workspaceChangeSnapshot(context);
   try {
     const { stdout, stderr } = await execPromise(sandboxed.command, {
       cwd: context?.projectRoot ?? process.cwd(),
@@ -692,17 +844,24 @@ async function handler(
       signal: context?.signal,
     });
 
-    const output = truncateOutput(stdout, stderr);
+    const output = boundedCommandOutput(stdout, stderr);
     recordBashVerification({
       sessionId,
-      ...(context?.branchId !== undefined ? { branchId: context.branchId } : {}),
+      ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
       command,
       status: "passed",
       exitCode: 0,
-      output,
+      output: output.diagnostic,
       ...(context !== undefined ? { context } : {}),
     });
-    return output;
+    await recordShellWorkspaceChanges({
+      before: beforeWorkspace,
+      sessionId,
+      ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
+      command,
+      ...(context !== undefined ? { context } : {}),
+    });
+    return output.display;
   } catch (error: unknown) {
     const err = error as Error & { stdout?: string; stderr?: string; killed?: boolean };
     if (err.name === "AbortError" || context?.signal?.aborted) {
@@ -710,27 +869,40 @@ async function handler(
     }
     const semantic = nonErrorExitExplanation(command, shellExitCode(error));
     if (semantic && !verificationCommand(command)) {
-      const output = truncateOutput(err.stdout ?? "", err.stderr ?? "");
-      return `${semantic}\n${output}`;
+      const output = boundedCommandOutput(err.stdout ?? "", err.stderr ?? "");
+      return `${semantic}\n${output.display}`;
     }
     let message = `Command failed: ${err.message}`;
     if (err.killed) {
       message += "\n(command was killed, likely due to timeout)";
     }
     if (err.stdout || err.stderr) {
-      message += "\n" + truncateOutput(err.stdout ?? "", err.stderr ?? "");
+      message += "\n" + boundedCommandOutput(err.stdout ?? "", err.stderr ?? "").display;
     }
     if (verificationCommand(command)) {
+      const diagnosticOutput = [
+        `Command failed: ${err.message}`,
+        err.killed ? "(command was killed, likely due to timeout)" : "",
+        err.stdout ?? "",
+        err.stderr ?? "",
+      ].filter(Boolean).join("\n");
       recordBashVerification({
         sessionId,
-        ...(context?.branchId !== undefined ? { branchId: context.branchId } : {}),
+        ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
         command,
         status: "failed",
         ...(shellExitCode(error) !== undefined ? { exitCode: shellExitCode(error)! } : {}),
-        output: message,
+        output: diagnosticOutput,
         ...(context !== undefined ? { context } : {}),
       });
     }
+    await recordShellWorkspaceChanges({
+      before: beforeWorkspace,
+      sessionId,
+      ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
+      command,
+      ...(context !== undefined ? { context } : {}),
+    });
     return { output: message, isError: true };
   }
 }

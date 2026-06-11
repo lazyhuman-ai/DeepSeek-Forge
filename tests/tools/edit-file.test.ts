@@ -191,6 +191,6 @@ describe("edit_file", () => {
       "s1",
     );
     expectToolError(result);
-    expect(outputOf(result)).toContain("NotebookEdit");
+    expect(outputOf(result)).toContain("notebook_edit");
   });
 });

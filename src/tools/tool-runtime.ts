@@ -38,7 +38,7 @@ export class ToolRuntime implements ToolExecutor {
           tool,
           args,
           ...(context.toolUseId !== undefined ? { toolUseId: context.toolUseId } : {}),
-          ...(context.branchId !== undefined ? { branchId: context.branchId } : {}),
+          ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
           ...(context.source !== undefined ? { source: context.source } : {}),
           ...(context.pathSandbox !== undefined ? { pathSandbox: context.pathSandbox } : {}),
         };

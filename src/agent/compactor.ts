@@ -168,6 +168,8 @@ function eventToTranscript(event: SessionEvent, options: Required<SerializeCompa
       return `[diagnostic_event #${event.seq} source=${event.source} status=${event.status}]\n${compactTranscriptText(event.message, options.maxEventChars, { label: "diagnostic_event", seq: event.seq })}`;
     case "verification_event":
       return `[verification_event #${event.seq} status=${event.status} command=${event.command}]\n${compactTranscriptText(event.summary, options.maxEventChars, { label: "verification_event", seq: event.seq })}`;
+    case "evidence_event":
+      return `[evidence_event #${event.seq} status=${event.status} step=${event.step} matched=${event.matchedSeqs.join(",")}]\n${compactTranscriptText(event.message, options.maxEventChars, { label: "evidence_event", seq: event.seq })}`;
     case "shell_task_event":
       return `[shell_task_event #${event.seq} task=${event.taskId} status=${event.status}]\n${event.message}`;
     case "worktree_event":

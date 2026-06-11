@@ -3,6 +3,7 @@ import type { ExecutableToolDefinition } from "../schemas.js";
 import { buildTool } from "../schemas.js";
 import { buildWorkspaceFileIndex, matchWorkspaceGlob, sortWorkspaceFilesByMtime } from "../../workspace/file-index.js";
 import { resolveToolPath, type ToolPathContext } from "./path-helper.js";
+import { notifyWorkspaceFileTouched } from "./workspace-file-hooks.js";
 
 const DEFAULT_LIMIT = 40;
 const MAX_LIMIT = 200;
@@ -80,7 +81,20 @@ async function handler(
   });
   if (!resolvedPath.ok) return resolvedPath;
 
-  const index = buildWorkspaceFileIndex(resolvedPath.path);
+  let index: ReturnType<typeof buildWorkspaceFileIndex>;
+  try {
+    index = buildWorkspaceFileIndex(resolvedPath.path);
+  } catch (error) {
+    return {
+      output: [
+        "File search failed before scanning.",
+        `Path: ${resolvedPath.path}`,
+        `Reason: ${error instanceof Error ? error.message : String(error)}`,
+        "Recovery: omit path to search the current project root, or provide an existing directory inside the workspace.",
+      ].join("\n"),
+      isError: true,
+    };
+  }
   const candidates = include
     ? index.files.filter((file) => matchWorkspaceGlob(file, include))
     : index.files;
@@ -98,6 +112,10 @@ async function handler(
     }));
 
   if (selected.length === 0) return "No files found.";
+  for (const match of selected.slice(0, 20)) {
+    await notifyWorkspaceFileTouched(_sessionId, resolve(index.root, match.file), context, "search");
+  }
+
   const lines = [
     `File search results for ${query.trim() ? JSON.stringify(query.trim()) : "(recent files)"} in ${index.root}`,
     `Source: ${index.source}. Showing ${selected.length} of ${matches.length || candidates.length} candidate file(s).`,

@@ -4,7 +4,7 @@ import { AgentLoop } from "../src/agent/agent-loop.js";
 import { SessionThreadStore } from "../src/streams/session-thread-store.js";
 import type { ModelProvider, ModelResponse, ModelMessage } from "../src/agent/model-provider.js";
 import type { ToolExecutor, ToolExecResult } from "../src/agent/tool-executor.js";
-import type { UserMessage } from "../src/streams/event-types.js";
+import type { RuntimeEvent, UserMessage } from "../src/streams/event-types.js";
 import { ArtifactStore } from "../src/artifacts/artifact-store.js";
 
 const sid = "s1";
@@ -164,6 +164,56 @@ describe("AgentLoop", () => {
     expect(thread[3]!.type).toBe("assistant_message");
   });
 
+  it("preserves tool-call order barriers and mutable execution context across exclusive tools", async () => {
+    const provider = makeProvider([
+      {
+        text: "",
+        finishReason: "tool_calls",
+        toolCalls: [
+          { id: "tc_enter", name: "enter_worktree", args: {} },
+          { id: "tc_read", name: "read_file", args: { file_path: "README.md" } },
+        ],
+      },
+      { text: "done", finishReason: "stop" },
+    ]);
+    const observedRoots: string[] = [];
+    const executor: ToolExecutor = {
+      execute: vi.fn().mockImplementation(async (name: string, _args, _sid, context) => {
+        if (name === "enter_worktree") {
+          context.projectRoot = "/repo.worktrees/feature";
+          return { toolCallId: "tc_enter", toolName: name, output: "entered", isError: false };
+        }
+        observedRoots.push(context.projectRoot);
+        return { toolCallId: "tc_read", toolName: name, output: `root=${context.projectRoot}`, isError: false };
+      }),
+    };
+    const loop = new AgentLoop(provider, executor, store, nextSeq, now, {
+      tools: [
+        { name: "enter_worktree", description: "enter", params: {}, isConcurrencySafe: false },
+        { name: "read_file", description: "read", params: {}, isConcurrencySafe: true },
+      ],
+      toolExecutionContext: {
+        projectRoot: "/repo",
+      },
+    });
+
+    store.append(sid, { type: "user_message", seq: 1, timestamp: ts, sessionId: sid, text: "enter then read" });
+
+    const result = await loop.runTurn(sid);
+
+    expect(result.outcome).toBe("turn_finished");
+    expect(observedRoots).toEqual(["/repo.worktrees/feature"]);
+    expect((executor.execute as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0])).toEqual([
+      "enter_worktree",
+      "read_file",
+    ]);
+    const thread = store.getThread(sid);
+    expect(thread.filter((event) => event.type === "tool_result").map((event) => event.type === "tool_result" ? event.result : "")).toEqual([
+      "entered",
+      "root=/repo.worktrees/feature",
+    ]);
+  });
+
   it("refreshes tool definitions between model iterations", async () => {
     const tools = [{ name: "extension_install", description: "Install", params: {} }];
     let call = 0;
@@ -254,6 +304,46 @@ describe("AgentLoop", () => {
     const secondCall = (provider.generate as ReturnType<typeof vi.fn>).mock.calls[1]!;
     const messages = secondCall[0] as ModelMessage[];
     expect(messages.some((m) => m.role === "tool" && m.content === "crash")).toBe(true);
+  });
+
+  it("stops retrying after repeated final readiness blocks", async () => {
+    const provider = makeProvider([
+      { text: "done", finishReason: "stop" },
+      { text: "done again", finishReason: "stop" },
+      { text: "still done", finishReason: "stop" },
+    ]);
+    const executor = makeExecutor([]);
+    const loop = new AgentLoop(provider, executor, store, nextSeq, now);
+
+    store.append(sid, { type: "user_message", seq: 1, timestamp: ts, sessionId: sid, text: "finish" });
+    store.append(sid, {
+      type: "diagnostic_event",
+      seq: 2,
+      timestamp: ts,
+      sessionId: sid,
+      source: "test",
+      status: "issues",
+      message: "1 diagnostic",
+      diagnostics: [{ filePath: "src/app.ts", line: 1, severity: "error", message: "broken", source: "test" }],
+    });
+    seq = 3;
+
+    const result = await loop.runTurn(sid);
+
+    expect(result.outcome).toBe("tool_failure");
+    if (result.outcome === "tool_failure") {
+      expect(result.runtimeKind).toBe("workspace_readiness");
+      expect(result.message).toContain("Final readiness gate blocked 3 consecutive final answer attempt");
+    }
+    const thread = store.getThread(sid);
+    const readinessEvents = thread.filter((event): event is RuntimeEvent => (
+      event.type === "runtime_event" &&
+      event.runtimeKind === "workspace_readiness"
+    ));
+    expect(readinessEvents).toHaveLength(3);
+    expect(String(readinessEvents[2]?.message)).toContain("final readiness block 3/3");
+    expect(thread.some((event) => event.type === "assistant_message")).toBe(false);
+    expect(provider.generate).toHaveBeenCalledTimes(3);
   });
 
   it("persists large tool output to artifact and writes a pointer", async () => {
@@ -601,6 +691,70 @@ describe("AgentLoop", () => {
     expect(provider.generate).toHaveBeenCalledTimes(2);
     const thread = store.getThread(sid);
     expect(thread.map((e) => e.type)).toEqual(["compaction_block", "assistant_message", "context_usage_event"]);
+  });
+
+  it("preserves structured workspace facts when compacting old transcript events", async () => {
+    const provider = makeProvider([
+      {
+        text: "final answer",
+        finishReason: "stop",
+        rawUsage: { input_tokens: 9, output_tokens: 1 },
+      },
+      {
+        text: "## Active Task\nNone.\n\n## Critical Context\nWorkspace facts compacted.",
+        finishReason: "stop",
+      },
+    ]);
+    const executor = makeExecutor([]);
+    const loop = new AgentLoop(provider, executor, store, nextSeq, now, {
+      maxContextTokens: 10,
+      autoCompactBuffer: 5,
+      compactionKeepRecentTokens: 1,
+    });
+
+    store.append(sid, { type: "user_message", seq: 1, timestamp: ts, sessionId: sid, text: "old request" });
+    store.append(sid, {
+      type: "todo_event",
+      seq: 2,
+      timestamp: ts,
+      sessionId: sid,
+      items: [{ id: "1", content: "verify after edit", status: "completed" }],
+      message: "Todos updated.",
+    });
+    store.append(sid, {
+      type: "diff_event",
+      seq: 3,
+      timestamp: ts,
+      sessionId: sid,
+      filePath: "/repo/src/app.ts",
+      operation: "updated",
+      additions: 1,
+      deletions: 1,
+      summary: "updated /repo/src/app.ts (+1/-1)",
+    });
+    store.append(sid, {
+      type: "verification_event",
+      seq: 4,
+      timestamp: ts,
+      sessionId: sid,
+      command: "npm run typecheck",
+      status: "passed",
+      exitCode: 0,
+      summary: "typecheck passed",
+    });
+
+    const result = await loop.runTurn(sid);
+
+    expect(result.outcome).toBe("turn_finished");
+    const thread = store.getThread(sid);
+    expect(thread.map((e) => e.type)).toEqual([
+      "todo_event",
+      "diff_event",
+      "verification_event",
+      "compaction_block",
+      "assistant_message",
+      "context_usage_event",
+    ]);
   });
 
   it("returns usage telemetry failure instead of estimating when real usage is required", async () => {

@@ -13,6 +13,9 @@ export type UsageRecord = {
   usage: ModelUsage;
   contextWindowTokens?: number;
   contextUsedPercent?: number;
+  cachePrefixChanged?: boolean;
+  cachePrefixReasons?: string[];
+  cacheHitRate?: number;
   pricing?: ModelPricing;
   cost?: number;
 };

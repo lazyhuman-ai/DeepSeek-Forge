@@ -9,6 +9,7 @@ import { readTextFile, writeTextFile } from "../text-file-io.js";
 import { maybeRecordPassiveTypeScriptDiagnostics } from "./passive-diagnostics.js";
 import { buildEditCheckpoint } from "./edit-checkpoint.js";
 import { findActualString, preserveQuoteStyle } from "./edit-string-utils.js";
+import { notifyWorkspaceFileChanged } from "./workspace-file-hooks.js";
 
 const MAX_EDIT_FILE_SIZE = 1024 * 1024 * 1024; // 1 GiB
 
@@ -39,9 +40,91 @@ async function handler(
     return toolError("No changes to make: old_string and new_string are exactly the same.");
   }
 
-  // Error 3: create via empty old_string but file exists
+  // Empty old_string creates a missing file, and fills an existing empty file.
+  // This matches the ergonomic Claude Code behavior while still rejecting
+  // accidental overwrites of non-empty files.
   if (!oldString && existsSync(filePath)) {
-    return toolError("Cannot create new file — file already exists. Use write_file to overwrite or edit_file with a non-empty old_string.");
+    if (filePath.endsWith(".ipynb")) {
+      return toolError("File is a Jupyter Notebook. Use notebook_edit to edit .ipynb files structurally at the cell level.");
+    }
+    try {
+      const stat = statSync(filePath);
+      if (stat.size > MAX_EDIT_FILE_SIZE) {
+        return toolError(`File is too large to edit (${stat.size} bytes). Maximum editable file size is 1 GiB.`);
+      }
+    } catch {
+      // stat failed, continue anyway
+    }
+    const existingText = readTextFile(filePath);
+    if (existingText.content.length > 0) {
+      return toolError("Cannot create new file — file already exists and is not empty. Read it first, then use edit_file with a non-empty old_string or write_file to overwrite.");
+    }
+    writeTextFile(filePath, newString, {
+      encoding: existingText.encoding,
+      hadBom: existingText.hadBom,
+      lineEnding: existingText.lineEnding,
+    });
+    readFileState.set(filePath, {
+      content: newString,
+      mtimeMs: Math.floor(statSync(filePath).mtimeMs),
+      encoding: existingText.encoding,
+      hadBom: existingText.hadBom,
+      lineEnding: existingText.lineEnding,
+    });
+    context?.workspaceActivity?.recordDiff(
+      sessionId,
+      buildStructuredDiff(filePath, "", newString, "updated"),
+      context?.branchId,
+      buildEditCheckpoint({
+        beforeExists: true,
+        beforeContent: "",
+        afterContent: newString,
+        beforeText: existingText,
+      }),
+    );
+    maybeRecordPassiveTypeScriptDiagnostics({ sessionId, filePath, context });
+    await notifyWorkspaceFileChanged(sessionId, {
+      filePath,
+      beforeContent: "",
+      afterContent: newString,
+      operation: "updated",
+    }, context);
+    return `File edited: ${filePath}.`;
+  }
+
+  if (!oldString && !existsSync(filePath)) {
+    const dir = dirname(filePath);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeTextFile(filePath, newString, {
+      encoding: "utf8",
+      hadBom: false,
+      lineEnding: "\n",
+    });
+    readFileState.set(filePath, {
+      content: newString,
+      mtimeMs: Math.floor(statSync(filePath).mtimeMs),
+      encoding: "utf8",
+      hadBom: false,
+      lineEnding: "\n",
+    });
+    context?.workspaceActivity?.recordDiff(
+      sessionId,
+      buildStructuredDiff(filePath, "", newString, "created"),
+      context?.branchId,
+      buildEditCheckpoint({
+        beforeExists: false,
+        beforeContent: "",
+        afterContent: newString,
+      }),
+    );
+    maybeRecordPassiveTypeScriptDiagnostics({ sessionId, filePath, context });
+    await notifyWorkspaceFileChanged(sessionId, {
+      filePath,
+      beforeContent: null,
+      afterContent: newString,
+      operation: "created",
+    }, context);
+    return `File created: ${filePath}.`;
   }
 
   // Error 4: file doesn't exist
@@ -97,7 +180,7 @@ async function handler(
 
   // Error 5: .ipynb
   if (filePath.endsWith(".ipynb")) {
-    return toolError("File is a Jupyter Notebook. Use the NotebookEdit tool to edit .ipynb files.");
+    return toolError("File is a Jupyter Notebook. Use notebook_edit to edit .ipynb files structurally at the cell level.");
   }
 
   // Error 8: string not found
@@ -145,7 +228,7 @@ async function handler(
   context?.workspaceActivity?.recordDiff(
     sessionId,
     buildStructuredDiff(filePath, fileContent, updatedContent, "updated"),
-    context.branchId,
+    context?.branchId,
     buildEditCheckpoint({
       beforeExists: true,
       beforeContent: fileContent,
@@ -154,6 +237,12 @@ async function handler(
     }),
   );
   maybeRecordPassiveTypeScriptDiagnostics({ sessionId, filePath, context });
+  await notifyWorkspaceFileChanged(sessionId, {
+    filePath,
+    beforeContent: fileContent,
+    afterContent: updatedContent,
+    operation: "updated",
+  }, context);
 
   if (replaceAll) {
     return `Successfully replaced ${matches} occurrence(s) of the string in ${filePath}.`;

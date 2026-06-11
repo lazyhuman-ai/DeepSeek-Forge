@@ -22,6 +22,7 @@ import type { RuntimeEvent, McpElicitationRequestEvent, McpElicitationResponseEv
 import type { ExecutableToolDefinition, ToolCapability, ToolDefinition } from "../tools/schemas.js";
 import type { ToolRegistry } from "../tools/tool-registry.js";
 import { createLogger } from "../core/logger.js";
+import { CODEGRAPH_READ_ONLY_TOOLS, ensureCodeGraphReady } from "../workspace/codegraph-runtime.js";
 import { McpConfigStore, type McpConfigStoreOptions } from "./config-store.js";
 import { ForgeMcpOAuthProvider, McpOAuthStore } from "./oauth.js";
 import type {
@@ -405,7 +406,7 @@ export class McpRuntimeManager {
     const env = replaceCatalogPlaceholders(entry.env, this.#store.projectRoot);
     const headers = replaceCatalogPlaceholders(entry.headers, this.#store.projectRoot);
     const url = entry.url?.replaceAll("{{projectRoot}}", this.#store.projectRoot);
-    const server = this.addServer({
+    const serverInput: Omit<McpServerConfig, "id"> & { id?: string } = {
       name: entry.name,
       enabled: false,
       transport: entry.transport,
@@ -416,9 +417,28 @@ export class McpRuntimeManager {
       ...(args ? { args } : {}),
       ...(env ? { env } : {}),
       ...(headers ? { headers } : {}),
+      ...(entry.readOnlyToolNames ? { readOnlyToolNames: entry.readOnlyToolNames } : {}),
       source: "catalog",
+    };
+    if (entry.id === "codegraph" || entry.command === "{{codegraph}}") {
+      const command = await ensureCodeGraphReady({
+        projectRoot: this.#store.projectRoot,
+        autoInstall: true,
+      });
+      serverInput.command = command;
+      serverInput.args = ["serve", "--mcp"];
+      serverInput.cwd = this.#store.projectRoot;
+      serverInput.launchMode = "background";
+      serverInput.trust = "trusted";
+      serverInput.supportsParallelToolCalls = true;
+      serverInput.readOnlyToolNames = entry.readOnlyToolNames ?? CODEGRAPH_READ_ONLY_TOOLS;
+    }
+    const server = this.addServer(serverInput);
+    this.#appendMcpEvent({
+      server,
+      detail: "catalog_changed",
+      message: `MCP catalog entry installed ${server.trust === "trusted" ? "as trusted" : "in quarantine"}: ${entry.name}`,
     });
-    this.#appendMcpEvent({ server, detail: "catalog_changed", message: `MCP catalog entry installed in quarantine: ${entry.name}` });
     return server;
   }
 
@@ -938,7 +958,8 @@ export class McpRuntimeManager {
           .map((tool) => tool.name.toLowerCase()),
       );
       entry.tools = (toolsResult.tools ?? []).map((tool) => {
-        const readOnly = isRecord(tool.annotations) && tool.annotations.readOnlyHint === true;
+        const forcedReadOnly = server.readOnlyToolNames?.includes(tool.name) === true;
+        const readOnly = forcedReadOnly || (isRecord(tool.annotations) && tool.annotations.readOnlyHint === true);
         return {
           serverId: server.id,
           serverName: server.name,

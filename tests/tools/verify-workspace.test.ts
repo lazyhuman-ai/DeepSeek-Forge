@@ -149,8 +149,39 @@ describe("verify_workspace", () => {
     expect(isSafeWorkspaceVerificationCommand("cargo test --workspace")).toBe(true);
     expect(isSafeWorkspaceVerificationCommand("go test ./...")).toBe(true);
     expect(isSafeWorkspaceVerificationCommand("python -m ruff check .")).toBe(true);
+    expect(isSafeWorkspaceVerificationCommand("python3 -m unittest discover -s tests")).toBe(true);
     expect(isSafeWorkspaceVerificationCommand("./gradlew test")).toBe(true);
     expect(isSafeWorkspaceVerificationCommand("npm install left-pad")).toBe(false);
+  });
+
+  it("runs Python verification without creating bytecode cache noise", async () => {
+    mkdirSync(resolve(tmpDir, "tests"), { recursive: true });
+    writeFileSync(resolve(tmpDir, "tests", "test_demo.py"), [
+      "import unittest",
+      "",
+      "class DemoTest(unittest.TestCase):",
+      "    def test_ok(self):",
+      "        self.assertEqual(1 + 1, 2)",
+      "",
+      "if __name__ == '__main__':",
+      "    unittest.main()",
+      "",
+    ].join("\n"));
+    writeFileSync(resolve(tmpDir, "Makefile"), [
+      "test:",
+      "\tpython3 -m unittest discover -s tests",
+      "",
+    ].join("\n"));
+
+    const result = await verifyWorkspaceTool.handler(
+      { commands: ["python3 -m unittest discover -s tests"] },
+      "s1",
+      { projectRoot: tmpDir },
+    );
+
+    expect(String(result)).toContain("Workspace verification: passed");
+    expect(String(result)).toContain("python3 -m unittest discover -s tests");
+    expect(existsSync(resolve(tmpDir, "tests", "__pycache__"))).toBe(false);
   });
 
   it("is allowed by ToolRuntime policy for safe checks but not unsafe command payloads", async () => {
@@ -192,14 +223,14 @@ describe("verify_workspace", () => {
       appendSessionEvent: () => undefined,
     });
 
-    const allowed = await runtime.execute("verify_workspace", { commands: ["go test ./..."] }, "s1", {
+    const allowed = await runtime.execute("verify_workspace", { commands: ["python3 -m unittest discover -s tests"] }, "s1", {
       permissionBroker: broker,
       pathSandbox: new PathSandbox({ projectRoot: tmpDir }),
       projectRoot: tmpDir,
       source: { kind: "trigger", interactive: false },
     });
     expect(allowed.isError).toBe(true);
-    expect(String(allowed.output)).toContain("go test ./...");
+    expect(String(allowed.output)).toContain("python3 -m unittest discover -s tests");
     expect(String(allowed.output)).not.toContain("Tool permission denied before execution.");
   });
 });

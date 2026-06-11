@@ -15,7 +15,7 @@ const execPromise = promisify(exec);
 const DEFAULT_TIMEOUT = 120_000;
 const MAX_TIMEOUT = 600_000;
 const MAX_COMMANDS = 5;
-const MAX_OUTPUT_LENGTH = 20_000;
+const MAX_INLINE_OUTPUT_NOTICE_LENGTH = 20_000;
 
 const TSC_DIAGNOSTIC_RE = /^(.*)\((\d+),(\d+)\):\s+(error|warning)\s+(TS\d+):\s+(.*)$/;
 const TSC_PRETTY_DIAGNOSTIC_RE = /^(.*):(\d+):(\d+)\s+-\s+(error|warning)\s+(TS\d+):\s+(.*)$/;
@@ -26,6 +26,13 @@ type CommandRun = {
   status: "passed" | "failed";
   exitCode?: number;
   output: string;
+  diagnosticOutput: string;
+};
+
+type WorkspaceChangeSnapshot = {
+  root: string;
+  raw: string;
+  files: Set<string>;
 };
 
 function outputSummary(output: string): string {
@@ -34,9 +41,92 @@ function outputSummary(output: string): string {
   return compact.length <= 240 ? compact : `${compact.slice(0, 239).trim()}…`;
 }
 
+function parseGitStatusFiles(raw: string): Set<string> {
+  const files = new Set<string>();
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const pathPart = line.slice(3).trim();
+    if (!pathPart) continue;
+    const renameParts = pathPart.split(" -> ");
+    for (const part of renameParts) {
+      const cleaned = part.replace(/^"|"$/g, "");
+      if (cleaned) files.add(cleaned);
+    }
+  }
+  return files;
+}
+
+async function workspaceChangeSnapshot(
+  projectRoot: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceChangeSnapshot | null> {
+  try {
+    const rootResult = await execPromise("git rev-parse --show-toplevel", {
+      cwd: projectRoot,
+      shell: "/bin/bash",
+      timeout: 5_000,
+      signal,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    const root = rootResult.stdout.trim();
+    if (!root) return null;
+    const status = await execPromise("git status --porcelain=v1", {
+      cwd: root,
+      shell: "/bin/bash",
+      timeout: 5_000,
+      signal,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+    return {
+      root,
+      raw: status.stdout,
+      files: parseGitStatusFiles(status.stdout),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function recordVerificationWorkspaceChanges(input: {
+  before: WorkspaceChangeSnapshot | null;
+  sessionId: string;
+  branchId?: string;
+  command: string;
+  projectRoot: string;
+  context?: ToolExecutionContext;
+}): Promise<void> {
+  if (!input.before || input.context?.signal?.aborted) return;
+  const after = await workspaceChangeSnapshot(input.projectRoot, input.context?.signal);
+  if (!after || after.root !== input.before.root || after.raw === input.before.raw) return;
+  const files = new Set([...input.before.files, ...after.files]);
+  input.context?.workspaceActivity?.recordActivity({
+    sessionId: input.sessionId,
+    ...(input.branchId !== undefined ? { branchId: input.branchId } : {}),
+    activityKind: "change",
+    status: "completed",
+    title: "Verification command changed workspace",
+    message: `Verification command changed git status for ${files.size} file(s): ${input.command}`,
+    payload: {
+      root: after.root,
+      command: input.command,
+      beforeDirtyFiles: input.before.files.size,
+      afterDirtyFiles: after.files.size,
+      files: [...files].slice(0, 80),
+      truncated: files.size > 80,
+    },
+  });
+}
+
 function truncateOutput(output: string): string {
-  if (output.length <= MAX_OUTPUT_LENGTH) return output || "(no output)";
-  return `[output truncated: ${output.length} chars, showing last ${MAX_OUTPUT_LENGTH}]\n${output.slice(-MAX_OUTPUT_LENGTH)}`;
+  // Do not drop long verification evidence here. AgentLoop artifact handling
+  // will persist large tool_result payloads and leave a readable preview plus
+  // artifact pointer in the thread.
+  if (output.length <= MAX_INLINE_OUTPUT_NOTICE_LENGTH) return output || "(no output)";
+  return [
+    `[large verification output: ${output.length} chars]`,
+    "The complete output is preserved in this tool result and may be artifactized by ForgeAgent.",
+    output,
+  ].join("\n");
 }
 
 function shellExitCode(error: unknown): number | undefined {
@@ -112,12 +202,19 @@ async function runCommand(
       timeout,
       signal,
       maxBuffer: 10 * 1024 * 1024,
+      env: {
+        ...process.env,
+        // Verification should not create Python bytecode cache files that pollute
+        // workspace diffs and readiness review.
+        PYTHONDONTWRITEBYTECODE: "1",
+      },
     });
     return {
       command,
       status: "passed",
       exitCode: 0,
       output: truncateOutput([stdout, stderr].filter(Boolean).join("\n")),
+      diagnosticOutput: [stdout, stderr].filter(Boolean).join("\n"),
     };
   } catch (error) {
     const err = error as Error & { stdout?: string; stderr?: string; killed?: boolean };
@@ -132,6 +229,7 @@ async function runCommand(
       status: "failed",
       ...(shellExitCode(error) !== undefined ? { exitCode: shellExitCode(error)! } : {}),
       output: truncateOutput(output),
+      diagnosticOutput: output,
     };
   }
 }
@@ -157,7 +255,7 @@ async function handler(
     ].join("\n");
     context?.workspaceActivity?.recordVerification({
       sessionId,
-      ...(context.branchId !== undefined ? { branchId: context.branchId } : {}),
+      ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
       command: "verify_workspace:auto-detect",
       status: "failed",
       summary: "No safe verification command detected.",
@@ -182,9 +280,10 @@ async function handler(
 
   const results: CommandRun[] = [];
   for (const command of commands) {
+    const beforeWorkspace = await workspaceChangeSnapshot(projectRoot, context?.signal);
     context?.workspaceActivity?.recordVerification({
       sessionId,
-      ...(context.branchId !== undefined ? { branchId: context.branchId } : {}),
+      ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
       command,
       status: "running",
       summary: "Verification command started.",
@@ -192,10 +291,10 @@ async function handler(
     const result = await runCommand(command, projectRoot, timeout, context?.signal);
     results.push(result);
     if (shouldRecordTypeScriptDiagnostics(command)) {
-      const diagnostics = parseVerificationDiagnostics(result.output);
+      const diagnostics = parseVerificationDiagnostics(result.diagnosticOutput);
       context?.workspaceActivity?.recordDiagnostics({
         sessionId,
-        ...(context.branchId !== undefined ? { branchId: context.branchId } : {}),
+        ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
         source: "verify-workspace",
         diagnostics,
         failed: result.status === "failed" && diagnostics.length === 0,
@@ -208,11 +307,19 @@ async function handler(
     }
     context?.workspaceActivity?.recordVerification({
       sessionId,
-      ...(context.branchId !== undefined ? { branchId: context.branchId } : {}),
+      ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
       command,
       status: result.status,
       ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
       summary: outputSummary(result.output),
+    });
+    await recordVerificationWorkspaceChanges({
+      before: beforeWorkspace,
+      sessionId,
+      ...(context?.branchId !== undefined ? { branchId: context?.branchId } : {}),
+      command,
+      projectRoot,
+      ...(context !== undefined ? { context } : {}),
     });
   }
 

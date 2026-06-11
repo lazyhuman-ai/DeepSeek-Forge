@@ -36,6 +36,29 @@ export {
 } from "./workspace/activity-manager.js";
 export type * from "./workspace/activity-manager.js";
 export { buildStructuredDiff } from "./workspace/diff.js";
+export {
+  evaluateWorkspaceReadiness,
+} from "./workspace/readiness.js";
+export type * from "./workspace/readiness.js";
+export {
+  extractProjectHostChecks,
+} from "./workspace/host-checks.js";
+export type * from "./workspace/host-checks.js";
+export {
+  findTodoEvidence,
+  missingEvidenceForCompletedTodos,
+  validateStepEvidence,
+} from "./workspace/evidence.js";
+export type * from "./workspace/evidence.js";
+export {
+  CODEGRAPH_READ_ONLY_TOOLS,
+  CODEGRAPH_VERSION,
+  codeGraphInitialized,
+  ensureCodeGraphReady,
+  installCodeGraph,
+  isCodeGraphIndexableRoot,
+  resolveCodeGraphLauncher,
+} from "./workspace/codegraph-runtime.js";
 export { PermissionBroker, ToolPolicyManager, buildPermissionDeniedMessage } from "./permissions/tool-policy.js";
 export type {
   PermissionGrant,

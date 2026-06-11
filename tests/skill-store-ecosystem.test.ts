@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SkillStore } from "../src/skills/skill-store.js";
 
-const BASE = ".forge/test-skill-store-ecosystem";
+const BASE = join(tmpdir(), "forgeagent-test-skill-store-ecosystem");
 
 function writeLegacySkill(
   name: string,
@@ -12,6 +14,28 @@ function writeLegacySkill(
   body = "# Skill\n\nFollow these reusable instructions.\n",
 ): string {
   const dir = join(BASE, name);
+  mkdirSync(dir, { recursive: true });
+  const lines = ["---"];
+  for (const [key, value] of Object.entries(frontmatter)) {
+    if (Array.isArray(value)) {
+      lines.push(`${key}:`);
+      for (const item of value) lines.push(`  - ${item}`);
+    } else {
+      lines.push(`${key}: ${String(value)}`);
+    }
+  }
+  lines.push("---", "", body);
+  writeFileSync(join(dir, "SKILL.md"), lines.join("\n"));
+  return dir;
+}
+
+function writeSkillAt(
+  root: string,
+  name: string,
+  frontmatter: Record<string, unknown>,
+  body = "# Skill\n\nFollow these path-scoped instructions.\n",
+): string {
+  const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
   const lines = ["---"];
   for (const [key, value] of Object.entries(frontmatter)) {
@@ -85,6 +109,74 @@ describe("SkillStore ecosystem", () => {
       recentPaths: ["ios/App/Dashboard.swift"],
     });
     expect(related).toContain("swiftui-helper");
+  });
+
+  it("discovers local nested skills when workspace paths are touched", () => {
+    const projectRoot = resolve(BASE, "project");
+    const storeRoot = resolve(BASE, "store");
+    const skillRoot = join(projectRoot, "src", "feature", ".claude", "skills");
+    const touchedPath = join(projectRoot, "src", "feature", "panel.ts");
+    mkdirSync(join(projectRoot, "src", "feature"), { recursive: true });
+    writeFileSync(touchedPath, "export const panel = true;\n");
+    writeSkillAt(skillRoot, "feature-helper", {
+      name: "feature-helper",
+      description: "Handle feature panel code",
+      paths: ["src/feature/**/*.ts"],
+      tags: ["feature"],
+    });
+
+    const store = new SkillStore({ rootDir: storeRoot, projectRoot });
+    expect(store.formatPrompt({
+      latestUserText: "Update the feature panel",
+      recentPaths: ["src/feature/panel.ts"],
+    })).not.toContain("feature-helper");
+
+    const events = store.activateForTouchedPaths([touchedPath], { sessionId: "s1" });
+
+    expect(events.map((event) => event.action)).toEqual(["dynamic_loaded", "dynamic_loaded"]);
+    expect(events[0]).toMatchObject({
+      type: "skill_event",
+      sessionId: "s1",
+      action: "dynamic_loaded",
+      source: "project",
+    });
+    expect(events[1]).toMatchObject({
+      type: "skill_event",
+      sessionId: "s1",
+      action: "dynamic_loaded",
+      skillName: "feature-helper",
+    });
+    expect(store.get("feature-helper")?.status).toBe("active");
+    expect(store.formatPrompt({
+      latestUserText: "Update the feature panel",
+      recentPaths: ["src/feature/panel.ts"],
+    })).toContain("feature-helper");
+  });
+
+  it("does not dynamically load skills from gitignored workspace paths", () => {
+    const projectRoot = resolve(BASE, "ignored-project");
+    const storeRoot = resolve(BASE, "ignored-store");
+    const skillRoot = join(projectRoot, "generated", ".claude", "skills");
+    const touchedPath = join(projectRoot, "generated", "panel.ts");
+    mkdirSync(join(projectRoot, "generated"), { recursive: true });
+    writeFileSync(join(projectRoot, ".gitignore"), "generated/\n");
+    writeFileSync(touchedPath, "export const generated = true;\n");
+    writeSkillAt(skillRoot, "ignored-helper", {
+      name: "ignored-helper",
+      description: "Should not enter the prompt from ignored output",
+      paths: ["generated/**/*.ts"],
+    });
+    execFileSync("git", ["init"], { cwd: projectRoot, stdio: "ignore" });
+
+    const store = new SkillStore({ rootDir: storeRoot, projectRoot });
+    const events = store.activateForTouchedPaths([touchedPath], { sessionId: "s1" });
+
+    expect(events).toEqual([]);
+    expect(store.get("ignored-helper")).toBeNull();
+    expect(store.formatPrompt({
+      latestUserText: "Update generated panel",
+      recentPaths: ["generated/panel.ts"],
+    })).not.toContain("ignored-helper");
   });
 
   it("keeps unsafe legacy skills out of the active prompt", () => {

@@ -138,6 +138,8 @@ function renderEvent(event: SessionEvent): string {
       return `[compaction_block #${event.seq}]\n${event.summary}`;
     case "usage_event":
       return `[usage_event #${event.seq}]\n${event.message}`;
+    case "evidence_event":
+      return `[evidence_event #${event.seq} ${event.status} step=${event.step} matched=${event.matchedSeqs.join(",")}]\n${event.message}`;
     case "context_usage_event":
     case "assistant_delta":
     case "skill_event":

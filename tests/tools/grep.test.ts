@@ -23,7 +23,7 @@ describe("grep", () => {
   it("finds matching lines in files", async () => {
     writeFileSync(tmpPath("code.ts"), "const foo = 1;\nconst bar = 2;\nconst fooBar = 3;");
     const result = await grepTool.handler(
-      { pattern: "foo", path: tmpDir },
+      { pattern: "foo", path: tmpDir, output_mode: "content" },
       "s1",
     );
     expect(result).toContain("foo");
@@ -42,7 +42,7 @@ describe("grep", () => {
   it("supports case-insensitive search", async () => {
     writeFileSync(tmpPath("code.ts"), "const HELLO = 1;");
     const result = await grepTool.handler(
-      { pattern: "hello", path: tmpDir, case_insensitive: true },
+      { pattern: "hello", path: tmpDir, case_insensitive: true, output_mode: "content" },
       "s1",
     );
     expect(result).toContain("HELLO");
@@ -52,7 +52,7 @@ describe("grep", () => {
     writeFileSync(tmpPath("a.ts"), "const foo = 1;");
     writeFileSync(tmpPath("b.js"), "const foo = 2;");
     const result = await grepTool.handler(
-      { pattern: "foo", path: tmpDir, include: "*.ts" },
+      { pattern: "foo", path: tmpDir, include: "*.ts", output_mode: "content" },
       "s1",
     );
     expect(result).toContain("a.ts");
@@ -82,7 +82,7 @@ describe("grep", () => {
     writeFileSync(tmpPath("many.ts"), Array.from({ length: 8 }, (_v, i) => `const foo${i} = ${i};`).join("\n"));
 
     const result = await grepTool.handler(
-      { pattern: "foo", path: tmpDir, head_limit: 2, offset: 3 },
+      { pattern: "foo", path: tmpDir, head_limit: 2, offset: 3, output_mode: "content" },
       "s1",
     );
     expect(result).toContain("foo3");
@@ -94,7 +94,7 @@ describe("grep", () => {
     writeFileSync(tmpPath("safe.ts"), "const literal = \"foo; rm -rf /\";");
 
     const result = await grepTool.handler(
-      { pattern: "foo; rm -rf /", path: tmpDir },
+      { pattern: "foo; rm -rf /", path: tmpDir, output_mode: "content" },
       "s1",
     );
 
@@ -105,7 +105,7 @@ describe("grep", () => {
   it("handles regex patterns", async () => {
     writeFileSync(tmpPath("code.ts"), "const x1 = 1;\nconst x2 = 2;\nconst y = 3;");
     const result = await grepTool.handler(
-      { pattern: "const x\\d", path: tmpDir },
+      { pattern: "const x\\d", path: tmpDir, output_mode: "content" },
       "s1",
     );
     expect(result).toContain("const x1");
@@ -117,7 +117,7 @@ describe("grep", () => {
     writeFileSync(tmpPath("project.ts"), "const projectOnly = true;");
 
     const result = await grepTool.handler(
-      { pattern: "projectOnly" },
+      { pattern: "projectOnly", output_mode: "content" },
       "s1",
       { projectRoot: tmpDir },
     );
@@ -131,7 +131,7 @@ describe("grep", () => {
     writeFileSync(tmpPath("code.ts"), "const forgeSearch = true;");
 
     const result = await grepTool.handler(
-      { pattern: "forgeSearch", path: tmpDir },
+      { pattern: "forgeSearch", path: tmpDir, output_mode: "content" },
       "s1",
     );
 

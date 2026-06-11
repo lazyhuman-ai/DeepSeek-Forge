@@ -7,6 +7,7 @@ import { resolveToolPath, type ToolPathContext } from "./path-helper.js";
 import { buildWorkspaceFileIndex, matchWorkspaceGlob, sortWorkspaceFilesByMtime } from "../../workspace/file-index.js";
 
 const DEFAULT_MAX_RESULTS = 100;
+const SKIP_DIRS = new Set([".git", "node_modules", "dist", "build", "coverage", ".forge"]);
 
 function findRgBinary(): string | null {
   try {
@@ -55,6 +56,7 @@ function nativeGlob(baseDir: string, pattern: string, maxResults: number): strin
       const entries = readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
         if (results.length >= maxResults) return;
+        if (entry.isDirectory() && SKIP_DIRS.has(entry.name)) continue;
         const fullPath = resolve(dir, entry.name);
         const relative = fullPath.slice(baseDir.length + 1);
 
@@ -98,7 +100,8 @@ async function handler(
   _sessionId: string,
   context?: ToolPathContext,
 ): Promise<unknown> {
-  const pattern = args.pattern as string;
+  const pattern = typeof args.pattern === "string" ? args.pattern.trim() : "";
+  if (!pattern) return { output: "pattern is required.", isError: true };
   const defaultRoot = context?.projectRoot ?? process.cwd();
   const resolvedPath = resolveToolPath(args.path ? args : { ...args, path: defaultRoot }, context, {
     argName: "path",
@@ -109,7 +112,27 @@ async function handler(
   if (!resolvedPath.ok) return resolvedPath;
   const path = resolvedPath.path;
 
-  const searchDir = existsSync(path) && !path.includes("*") ? path : process.cwd();
+  if (!existsSync(path)) {
+    return {
+      output: [
+        "Glob search path does not exist.",
+        `Path: ${path}`,
+        "Recovery: omit path to search the current project root, or provide an existing directory inside the workspace.",
+      ].join("\n"),
+      isError: true,
+    };
+  }
+  if (!statSync(path).isDirectory()) {
+    return {
+      output: [
+        "Glob search path is not a directory.",
+        `Path: ${path}`,
+        "Recovery: use the parent directory as path and put the file pattern in pattern.",
+      ].join("\n"),
+      isError: true,
+    };
+  }
+  const searchDir = path;
 
   try {
     const index = buildWorkspaceFileIndex(searchDir);
@@ -129,7 +152,26 @@ async function handler(
     let result: string;
     try {
       result = execRg(
-        ["--files", "--glob", pattern, "--sort=modified", "--no-ignore", "--hidden", "."],
+        [
+          "--files",
+          "--glob",
+          pattern,
+          "--sort=modified",
+          "--hidden",
+          "--glob",
+          "!.git",
+          "--glob",
+          "!node_modules",
+          "--glob",
+          "!dist",
+          "--glob",
+          "!build",
+          "--glob",
+          "!coverage",
+          "--glob",
+          "!.forge",
+          ".",
+        ],
         searchDir,
       );
     } catch {
@@ -157,7 +199,7 @@ async function handler(
     });
   } catch (error: unknown) {
     const err = error as Error;
-    return `Glob failed: ${err.message}`;
+    return { output: `Glob failed: ${err.message}`, isError: true };
   }
 }
 

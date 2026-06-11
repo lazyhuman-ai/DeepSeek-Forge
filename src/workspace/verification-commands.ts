@@ -80,6 +80,7 @@ function safeTypeScriptCommand(command: string): boolean {
 function safePythonCommand(command: string): boolean {
   const targetArgs = `(?:\\s+${SAFE_ARG}){0,8}`;
   return new RegExp(`^(?:python|python3)\\s+-m\\s+(?:pytest|mypy|pyright)${targetArgs}$`).test(command) ||
+    new RegExp(`^(?:python|python3)\\s+-m\\s+unittest(?:\\s+discover)?${targetArgs}$`).test(command) ||
     new RegExp(`^(?:python|python3)\\s+-m\\s+ruff\\s+check${targetArgs}$`).test(command) ||
     new RegExp(`^uv\\s+run\\s+(?:pytest|mypy|pyright)${targetArgs}$`).test(command) ||
     new RegExp(`^uv\\s+run\\s+ruff\\s+check${targetArgs}$`).test(command);

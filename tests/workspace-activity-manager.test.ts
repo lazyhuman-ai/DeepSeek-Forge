@@ -6,6 +6,7 @@ import {
   buildWorkspaceActivitySummary,
   WorkspaceActivityManager,
 } from "../src/workspace/activity-manager.js";
+import { validateStepEvidence } from "../src/workspace/evidence.js";
 import { workspaceReviewTool } from "../src/tools/built-in/workspace-review.js";
 import { buildStructuredDiff } from "../src/workspace/diff.js";
 import { todoWriteTool } from "../src/tools/built-in/todo-write.js";
@@ -46,6 +47,16 @@ describe("WorkspaceActivityManager", () => {
       exitCode: 2,
       summary: "1 error",
     });
+    events.push({
+      type: "artifact_pointer",
+      seq: 99,
+      timestamp: "2026-06-09T00:00:00.000Z",
+      sessionId: "s1",
+      branchId: "main",
+      artifactId: "artifact_1",
+      mimeType: "text/plain",
+      sizeBytes: 128,
+    });
     activity.recordShellTask({
       sessionId: "s1",
       branchId: "main",
@@ -71,6 +82,7 @@ describe("WorkspaceActivityManager", () => {
     ]);
     expect(state.diagnostics).toHaveLength(1);
     expect(state.checks[0]?.status).toBe("failed");
+    expect(state.artifacts[0]?.artifactId).toBe("artifact_1");
     expect(state.shellTasks[0]?.status).toBe("running");
     expect(state.permissionGrants[0]?.grantKind).toBe("workspace_edits");
     expect(buildWorkspaceActivitySummary("s1", events, "main")).toContain("Diagnostics: 1 errors");
@@ -202,6 +214,59 @@ describe("WorkspaceActivityManager", () => {
     });
 
     expect(String(verified)).toContain("Workspace review: passed");
+  });
+
+  it("workspace_review does not treat its own gate todo as unresolved work", async () => {
+    const events: SessionEvent[] = [];
+    const activity = manager(events);
+    activity.recordDiff("s1", {
+      filePath: "/repo/src/app.ts",
+      operation: "updated",
+      additions: 1,
+      deletions: 1,
+      hunks: [],
+    });
+    activity.recordVerification({
+      sessionId: "s1",
+      command: "npm run typecheck",
+      status: "passed",
+      exitCode: 0,
+      summary: "clean",
+    });
+    activity.recordTodos("s1", [
+      { id: "review", content: "Run workspace_review to confirm readiness", status: "in_progress" },
+    ]);
+
+    const reviewed = await workspaceReviewTool.handler({}, "s1", {
+      readThread: () => events,
+      workspaceActivity: activity,
+    });
+
+    expect(String(reviewed)).toContain("Workspace review: passed");
+    expect(String(reviewed)).toContain("workspace_review gate todo");
+  });
+
+  it("accepts passed workspace_review activity as explicit verification evidence", () => {
+    const events: SessionEvent[] = [];
+    const activity = manager(events);
+    activity.recordActivity({
+      sessionId: "s1",
+      activityKind: "verification",
+      status: "completed",
+      title: "Workspace review",
+      message: "Workspace activity review found no unresolved issues.",
+      payload: { ready: true },
+    });
+
+    const validation = validateStepEvidence({
+      step: "Complete todos and run workspace_review",
+      todoId: "review",
+      evidence: [{ kind: "verification", command: "workspace_review" }],
+      events,
+    });
+
+    expect(validation.ok).toBe(true);
+    expect(validation.matchedSeqs).toEqual([1]);
   });
 
   it("activity summary warns when changes are newer than the latest passing check", () => {
@@ -367,7 +432,8 @@ describe("WorkspaceActivityManager", () => {
       workspaceActivity: activity,
     });
 
-    expect(String(completed)).toContain("Verification reminder");
+    expect((completed as { isError?: boolean }).isError).toBe(true);
+    expect(String((completed as { output?: unknown }).output)).toContain("Verification reminder");
   });
 
   it("todo_write reminds the agent to rerun workspace_review after closing todos that previously blocked readiness", async () => {
@@ -392,7 +458,8 @@ describe("WorkspaceActivityManager", () => {
       workspaceActivity: activity,
     });
 
-    expect(String(completed)).toContain("Workspace review reminder");
-    expect(String(completed)).toContain("Run workspace_review again before finalizing");
+    expect((completed as { isError?: boolean }).isError).toBe(true);
+    expect(String((completed as { output?: unknown }).output)).toContain("Workspace review reminder");
+    expect(String((completed as { output?: unknown }).output)).toContain("Run workspace_review again before finalizing");
   });
 });

@@ -24,6 +24,12 @@ import { SessionThreadStore } from "../streams/session-thread-store.js";
 import { transition, SessionSupervisor } from "./session-supervisor.js";
 import { AgentLoop } from "../agent/agent-loop.js";
 import type { TurnResult } from "../agent/agent-loop.js";
+import {
+  buildCacheShape,
+  compareCacheShape,
+  type CacheShape,
+  type CacheShapeDiagnostics,
+} from "../agent/cache-shape.js";
 import type {
   ModelMessage,
   ModelPricing,
@@ -112,6 +118,8 @@ import {
   WorkspaceActivityManager,
   type WorkspaceActivityState,
 } from "../workspace/activity-manager.js";
+import { extractProjectHostChecks } from "../workspace/host-checks.js";
+import { WorkspaceLanguageServerManager } from "../workspace/language-server-manager.js";
 import type { VerificationEvent, ShellTaskEvent } from "../streams/event-types.js";
 import type {
   CreateTerminalSessionInput,
@@ -366,6 +374,8 @@ export class CoreAPI {
   #extensionRegistryStore?: ExtensionRegistryStore;
   #terminalManager?: TerminalManager;
   #workspaceActivityManager?: WorkspaceActivityManager;
+  #languageServerManagers = new Map<string, WorkspaceLanguageServerManager>();
+  #cacheShapes = new Map<string, CacheShape>();
 
   constructor(toolRegistry?: ToolRegistry, options?: {
     dataDir?: string;
@@ -443,6 +453,10 @@ export class CoreAPI {
       now: () => now(),
       onEvent: (event) => {
         this.#appendSystemEvent("skill_lifecycle", event.action, event.message);
+        if (event.sessionId !== "system" && this.#sessions.has(event.sessionId)) {
+          this.#threadStore.append(event.sessionId, event);
+          this.#notificationHub.emitSessionEvent(event.sessionId, event);
+        }
       },
     };
     if (options?.promptBudgetTokens !== undefined) {
@@ -1454,6 +1468,7 @@ export class CoreAPI {
     );
     if (activitySummary.trim()) promptOptions.workspaceActivitySummary = activitySummary;
     const systemPrompt = buildSystemPrompt(promptOptions);
+    const hostChecks = extractProjectHostChecks(projectRoot);
 
     const tools = this.#toolRegistry?.list() ?? [];
     const source = this.#turnSources.get(sessionId);
@@ -1489,10 +1504,27 @@ export class CoreAPI {
       modelProvider: trackedProvider,
       pathSandbox: this.#createPathSandbox(sessionId, projectRoot),
       projectRoot,
+      dataDir: this.#dataDir,
       readFileStateScope: `${session.projectId ?? "default"}:${sessionId}:${activeBranchId}`,
       readThread: (sid) => this.getVisibleThread(sid, activeBranchId),
+      hostChecks,
       bashSandboxMode: "enforce",
       branchId: activeBranchId,
+    };
+    toolExecutionContext.workspaceHooks = {
+      onFileTouched: (input) => this.#handleWorkspaceFileTouched(
+        input.sessionId,
+        input.filePath,
+        toolExecutionContext.projectRoot ?? projectRoot,
+        input.branchId,
+      ),
+      onFileChanged: (input) => this.#handleWorkspaceFileChanged(
+        input.sessionId,
+        input.filePath,
+        input.afterContent,
+        toolExecutionContext.projectRoot ?? projectRoot,
+        input.branchId,
+      ),
     };
     if (this.#permissionBroker) toolExecutionContext.permissionBroker = this.#permissionBroker;
     if (source) toolExecutionContext.source = source;
@@ -1522,6 +1554,9 @@ export class CoreAPI {
     }
     if (providerMetadata?.requiresUsage) {
       loopOptions.requireUsageForCompaction = true;
+    }
+    if (hostChecks.length > 0) {
+      loopOptions.hostChecks = hostChecks;
     }
 
     const loop = new AgentLoop(
@@ -1922,13 +1957,17 @@ export class CoreAPI {
     this.#threadStore.flush();
   }
 
-	  async shutdown(options?: { waitMs?: number }): Promise<void> {
-	    this.#scheduler?.stop();
-	    this.#runtimeManager?.stop();
-	    this.#webridgeRuntime?.shutdown();
-	    this.#mcpManager?.stop();
-	    this.#terminalManager?.shutdown();
-	    this.#supervisor?.stop();
+  async shutdown(options?: { waitMs?: number }): Promise<void> {
+    this.#scheduler?.stop();
+    this.#runtimeManager?.stop();
+    this.#webridgeRuntime?.shutdown();
+    this.#mcpManager?.stop();
+    this.#terminalManager?.shutdown();
+    this.#supervisor?.stop();
+    for (const manager of this.#languageServerManagers.values()) {
+      manager.dispose();
+    }
+    this.#languageServerManagers.clear();
     for (const [, controller] of this.#turnControllers) {
       controller.abort();
     }
@@ -2101,6 +2140,64 @@ export class CoreAPI {
       scratchRoot: join(this.#dataDir, "workspaces", `session_${sessionId}`),
       ...(readRoots.length > 0 ? { readRoots } : {}),
     });
+  }
+
+  #languageServerManager(projectRoot: string): WorkspaceLanguageServerManager {
+    const resolved = resolve(projectRoot);
+    let manager = this.#languageServerManagers.get(resolved);
+    if (!manager) {
+      manager = new WorkspaceLanguageServerManager(resolved);
+      this.#languageServerManagers.set(resolved, manager);
+    }
+    return manager;
+  }
+
+  #handleWorkspaceFileTouched(
+    sessionId: string,
+    filePath: string,
+    projectRoot: string,
+    branchId?: string,
+  ): void {
+    const lspStatus = this.#languageServerManager(projectRoot).notifyDidOpen(filePath);
+    if (lspStatus.state === "unavailable" && lspStatus.language !== "unknown") {
+      this.initWorkspaceActivityManager().recordActivity({
+        sessionId,
+        ...(branchId !== undefined ? { branchId } : {}),
+        activityKind: "diagnostic",
+        status: "info",
+        title: "Language server unavailable",
+        message: lspStatus.message,
+        payload: { filePath, language: lspStatus.language },
+      });
+    }
+    this.#skillStore?.activateForTouchedPaths([filePath], { sessionId });
+  }
+
+  #handleWorkspaceFileChanged(
+    sessionId: string,
+    filePath: string,
+    afterContent: string,
+    projectRoot: string,
+    branchId?: string,
+  ): void {
+    const manager = this.#languageServerManager(projectRoot);
+    const changeStatus = manager.notifyDidChange(filePath, afterContent);
+    const saveStatus = manager.notifyDidSave(filePath);
+    this.initWorkspaceActivityManager().recordActivity({
+      sessionId,
+      ...(branchId !== undefined ? { branchId } : {}),
+      activityKind: "change",
+      status: "completed",
+      title: "Workspace file changed",
+      message: `Updated ${filePath}; language service status: ${saveStatus.message}`,
+      payload: {
+        filePath,
+        language: saveStatus.language,
+        didChange: changeStatus.state,
+        didSave: saveStatus.state,
+      },
+    });
+    this.#skillStore?.activateForTouchedPaths([filePath], { sessionId });
   }
 
   #ensureBranchState(session: Session): void {
@@ -2359,8 +2456,15 @@ export class CoreAPI {
         tools,
         callbacks,
       ): Promise<ModelResponse> => {
+        const currentShape = buildCacheShape(messages, tools);
         const response = await provider.generate(messages, tools, callbacks);
-        this.#recordUsage(sessionId, response, messages, metadata ?? provider.getMetadata?.());
+        const cacheDiagnostics = compareCacheShape(
+          this.#cacheShapes.get(sessionId),
+          currentShape,
+          response.rawUsage,
+        );
+        this.#cacheShapes.set(sessionId, currentShape);
+        this.#recordUsage(sessionId, response, messages, metadata ?? provider.getMetadata?.(), cacheDiagnostics);
         return response;
       },
     };
@@ -2371,6 +2475,7 @@ export class CoreAPI {
     response: ModelResponse,
     messages: ModelMessage[],
     metadata: ModelProviderMetadata | undefined,
+    cacheDiagnostics?: CacheShapeDiagnostics,
   ): void {
     const requiresUsage = metadata?.requiresUsage === true;
     let usage = response.rawUsage;
@@ -2410,6 +2515,11 @@ export class CoreAPI {
     };
     if (contextWindowTokens !== undefined) record.contextWindowTokens = contextWindowTokens;
     if (contextUsedPercent !== undefined) record.contextUsedPercent = contextUsedPercent;
+    if (cacheDiagnostics !== undefined) {
+      record.cachePrefixChanged = cacheDiagnostics.prefixChanged;
+      record.cachePrefixReasons = cacheDiagnostics.reasons;
+      if (cacheDiagnostics.cacheHitRate !== undefined) record.cacheHitRate = cacheDiagnostics.cacheHitRate;
+    }
     if (pricing !== undefined) record.pricing = pricing;
     if (cost !== undefined) record.cost = cost;
     this.#usageLedger.append(record);
@@ -2425,6 +2535,12 @@ export class CoreAPI {
         : "",
       `out ${usage.output_tokens}`,
       usage.reasoning_tokens ? `reasoning ${usage.reasoning_tokens}` : "",
+      cacheDiagnostics?.reasons.length
+        ? `prefix ${cacheDiagnostics.reasons.join(",")}`
+        : "",
+      cacheDiagnostics?.cacheHitRate !== undefined
+        ? `cache hit ${(cacheDiagnostics.cacheHitRate * 100).toFixed(1)}%`
+        : "",
       `total ${total}`,
     ].filter(Boolean).join(" · ") + formatCost(cost, pricing?.currency);
 
@@ -2449,6 +2565,11 @@ export class CoreAPI {
     if (contextUsedPercent !== undefined) event.contextUsedPercent = contextUsedPercent;
     if (cost !== undefined) event.cost = cost;
     if (pricing?.currency !== undefined) event.currency = pricing.currency;
+    if (cacheDiagnostics !== undefined) {
+      event.cachePrefixChanged = cacheDiagnostics.prefixChanged;
+      event.cachePrefixReasons = cacheDiagnostics.reasons;
+      if (cacheDiagnostics.cacheHitRate !== undefined) event.cacheHitRate = cacheDiagnostics.cacheHitRate;
+    }
     this.#threadStore.append(sessionId, event);
   }
 
@@ -2514,7 +2635,7 @@ export class CoreAPI {
     const worktree = state.worktree;
     if (
       worktree?.path &&
-      (worktree.action === "entered" || worktree.action === "kept") &&
+      (worktree.action === "entered" || worktree.action === "committed" || worktree.action === "kept") &&
       existsSync(worktree.path)
     ) {
       return resolve(worktree.path);

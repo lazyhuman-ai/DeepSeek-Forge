@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { SessionEvent } from "../../src/streams/event-types.js";
 import { lspDiagnosticsTool } from "../../src/tools/built-in/lsp-diagnostics.js";
 import { lspQueryTool } from "../../src/tools/built-in/lsp-query.js";
 import { clearTypeScriptWorkspaceServices } from "../../src/workspace/typescript-service.js";
+import { clearWorkspaceLanguageServerManagers } from "../../src/workspace/language-server-manager.js";
 import { WorkspaceActivityManager } from "../../src/workspace/activity-manager.js";
 
 const tmpDir = resolve("tests/tmp/lsp-tools");
@@ -38,17 +39,20 @@ function writeProject(files: Record<string, string>): void {
 
 beforeEach(() => {
   clearTypeScriptWorkspaceServices();
+  clearWorkspaceLanguageServerManagers();
   if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
 });
 
 afterEach(() => {
   clearTypeScriptWorkspaceServices();
+  clearWorkspaceLanguageServerManagers();
   if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe("lsp tools", () => {
   it("advertises semantic TypeScript plus generic multi-language code navigation", () => {
     expect(lspQueryTool.description).toContain("TypeScript/JavaScript use the semantic TypeScript language service");
+    expect(lspQueryTool.description).toContain("Python uses Pyright language-server symbols when available");
     expect(lspQueryTool.description).toContain("generic lexical multi-language code index");
     expect(lspQueryTool.description).toContain("semantic TS/JS-only");
   });
@@ -177,7 +181,7 @@ describe("lsp tools", () => {
     const diagnosticEvent = events.find((event) => event.type === "diagnostic_event");
     expect(diagnosticEvent).toMatchObject({
       type: "diagnostic_event",
-      source: "typescript-language-service",
+      source: "workspace-language-server",
       status: "issues",
     });
     if (diagnosticEvent?.type === "diagnostic_event") {
@@ -206,12 +210,87 @@ describe("lsp tools", () => {
     expect(String((result as { output?: unknown }).output)).toContain("python -m pytest");
     expect(events).toContainEqual(expect.objectContaining({
       type: "diagnostic_event",
-      source: "typescript-language-service",
+      source: "workspace-language-server",
       status: "failed",
     }));
   });
 
-  it("falls back to a generic multi-language code index for Python navigation", async () => {
+  it("uses Pyright language-server symbols for Python when available", async () => {
+    const oldPath = process.env.PATH;
+    const binDir = resolve(tmpDir, "bin");
+    mkdirSync(resolve(tmpDir, "src"), { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    const serverPath = resolve(binDir, "pyright-langserver");
+    writeFileSync(serverPath, [
+      `#!${process.execPath}`,
+      "if (!process.argv.includes('--stdio')) process.exit(42);",
+      "let buffer = Buffer.alloc(0);",
+      "function send(id, result) {",
+      "  const body = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, result }));",
+      "  process.stdout.write(`Content-Length: ${body.length}\\r\\n\\r\\n`);",
+      "  process.stdout.write(body);",
+      "}",
+      "function handle(raw) {",
+      "  const msg = JSON.parse(raw);",
+      "  if (msg.id === undefined) return;",
+      "  if (msg.method === 'initialize') return send(msg.id, { capabilities: { documentSymbolProvider: true } });",
+      "  if (msg.method === 'textDocument/documentSymbol') return send(msg.id, [",
+      "    { name: 'PriceCalculator', kind: 5, range: { start: { line: 5, character: 6 }, end: { line: 8, character: 0 } }, selectionRange: { start: { line: 5, character: 6 }, end: { line: 5, character: 21 } }, children: [",
+      "      { name: 'subtotal', kind: 6, range: { start: { line: 6, character: 8 }, end: { line: 8, character: 0 } }, selectionRange: { start: { line: 6, character: 8 }, end: { line: 6, character: 16 } } }",
+      "    ] }",
+      "  ]);",
+      "  return send(msg.id, null);",
+      "}",
+      "process.stdin.on('data', chunk => {",
+      "  buffer = Buffer.concat([buffer, chunk]);",
+      "  while (true) {",
+      "    const end = buffer.indexOf('\\r\\n\\r\\n');",
+      "    if (end < 0) return;",
+      "    const header = buffer.subarray(0, end).toString('ascii');",
+      "    const match = /Content-Length:\\s*(\\d+)/i.exec(header);",
+      "    if (!match) return;",
+      "    const len = Number(match[1]);",
+      "    const start = end + 4;",
+      "    if (buffer.length < start + len) return;",
+      "    const body = buffer.subarray(start, start + len).toString('utf8');",
+      "    buffer = buffer.subarray(start + len);",
+      "    handle(body);",
+      "  }",
+      "});",
+      "",
+    ].join("\n"));
+    chmodSync(serverPath, 0o755);
+    const filePath = resolve(tmpDir, "src/pricing.py");
+    writeFileSync(filePath, [
+      "from typing import TypedDict",
+      "",
+      "class Item(TypedDict):",
+      "    price: float",
+      "",
+      "class PriceCalculator:",
+      "    def subtotal(self, items: list[Item]) -> float:",
+      "        return sum(item['price'] for item in items)",
+      "",
+    ].join("\n"));
+    process.env.PATH = binDir;
+    try {
+      const symbols = await lspQueryTool.handler({ query: "symbols", file_path: filePath }, "s1", {
+        projectRoot: tmpDir,
+      });
+
+      expect(String(symbols)).toContain("Language-server symbols");
+      expect(String(symbols)).toContain("PriceCalculator");
+      expect(String(symbols)).toContain("subtotal");
+      expect(String(symbols)).not.toContain("Generic code index");
+    } finally {
+      process.env.PATH = oldPath;
+    }
+  });
+
+  it("falls back to a generic multi-language code index for Python navigation when Pyright is unavailable", async () => {
+    const oldPath = process.env.PATH;
+    process.env.PATH = resolve(tmpDir, "empty-bin");
+    clearWorkspaceLanguageServerManagers();
     writeProject({
       "pipeline.py": [
         "class DataLoader:",
@@ -227,36 +306,40 @@ describe("lsp tools", () => {
     });
     const filePath = resolve(tmpDir, "src/pipeline.py");
 
-    const symbols = await lspQueryTool.handler({ query: "symbols", file_path: filePath }, "s1", {
-      projectRoot: tmpDir,
-    });
-    expect(String(symbols)).toContain("Generic code index symbols");
-    expect(String(symbols)).toContain("python class DataLoader");
-    expect(String(symbols)).toContain("python function build_dataset");
+    try {
+      const symbols = await lspQueryTool.handler({ query: "symbols", file_path: filePath }, "s1", {
+        projectRoot: tmpDir,
+      });
+      expect(String(symbols)).toContain("Generic code index symbols");
+      expect(String(symbols)).toContain("python class DataLoader");
+      expect(String(symbols)).toContain("python function build_dataset");
 
-    const workspaceSymbols = await lspQueryTool.handler({ query: "workspace_symbols", symbol: "build_dataset" }, "s1", {
-      projectRoot: tmpDir,
-    });
-    expect(String(workspaceSymbols)).toContain("build_dataset");
-    expect(String(workspaceSymbols)).toContain("generic lexical code index");
+      const workspaceSymbols = await lspQueryTool.handler({ query: "workspace_symbols", symbol: "build_dataset" }, "s1", {
+        projectRoot: tmpDir,
+      });
+      expect(String(workspaceSymbols)).toContain("build_dataset");
+      expect(String(workspaceSymbols)).toContain("generic lexical code index");
 
-    const definition = await lspQueryTool.handler({ query: "definition", file_path: filePath, line: 8, character: 10 }, "s1", {
-      projectRoot: tmpDir,
-    });
-    expect(String(definition)).toContain("Definitions for");
-    expect(String(definition)).toContain("src/pipeline.py:5");
+      const definition = await lspQueryTool.handler({ query: "definition", file_path: filePath, line: 8, character: 10 }, "s1", {
+        projectRoot: tmpDir,
+      });
+      expect(String(definition)).toContain("Definitions for");
+      expect(String(definition)).toContain("src/pipeline.py:5");
 
-    const references = await lspQueryTool.handler({ query: "references", symbol: "DataLoader" }, "s1", {
-      projectRoot: tmpDir,
-    });
-    expect(String(references)).toContain("References for DataLoader");
-    expect(String(references)).toContain("src/pipeline.py:1");
-    expect(String(references)).toContain("src/pipeline.py:8");
+      const references = await lspQueryTool.handler({ query: "references", symbol: "DataLoader" }, "s1", {
+        projectRoot: tmpDir,
+      });
+      expect(String(references)).toContain("References for DataLoader");
+      expect(String(references)).toContain("src/pipeline.py:1");
+      expect(String(references)).toContain("src/pipeline.py:8");
 
-    const hover = await lspQueryTool.handler({ query: "hover", file_path: filePath, line: 8, character: 10 }, "s1", {
-      projectRoot: tmpDir,
-    });
-    expect(String(hover)).toContain("Generic code index symbol build_dataset");
-    expect(String(hover)).toContain("not a language-server semantic hover");
+      const hover = await lspQueryTool.handler({ query: "hover", file_path: filePath, line: 8, character: 10 }, "s1", {
+        projectRoot: tmpDir,
+      });
+      expect(String(hover)).toContain("Generic code index symbol build_dataset");
+      expect(String(hover)).toContain("not a language-server semantic hover");
+    } finally {
+      process.env.PATH = oldPath;
+    }
   });
 });

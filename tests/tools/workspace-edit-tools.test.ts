@@ -7,6 +7,7 @@ import { editFileTool } from "../../src/tools/built-in/edit-file.js";
 import { readFileTool } from "../../src/tools/built-in/read-file.js";
 import { revertFileChangeTool } from "../../src/tools/built-in/edit-checkpoint.js";
 import { writeFileTool } from "../../src/tools/built-in/write-file.js";
+import { moveFileTool } from "../../src/tools/built-in/move-file.js";
 import { readFileStateForScope, clearScopedReadFileStates } from "../../src/tools/read-file-state.js";
 import { WorkspaceActivityManager } from "../../src/workspace/activity-manager.js";
 import { clearTypeScriptWorkspaceServices } from "../../src/workspace/typescript-service.js";
@@ -68,6 +69,54 @@ describe("workspace edit tools", () => {
     expect(readFileSync(filePath, "utf-8")).toBe("gamma beta");
   });
 
+  it("notifies workspace hooks when files are read and changed", async () => {
+    const readPath = tmpPath("hook-read.txt");
+    const writePath = tmpPath("hook-write.txt");
+    writeFileSync(readPath, "alpha\n");
+    const touched: Array<{ sessionId: string; filePath: string; reason: string }> = [];
+    const changed: Array<{ sessionId: string; filePath: string; beforeContent: string | null; afterContent: string }> = [];
+
+    await readFileTool.handler({ file_path: readPath }, "s1", {
+      readFileStateScope: "project:s1:main",
+      workspaceHooks: {
+        onFileTouched: (input) => {
+          touched.push(input);
+        },
+        onFileChanged: (input) => {
+          changed.push(input);
+        },
+      },
+    });
+    await writeFileTool.handler({ file_path: writePath, content: "created\n" }, "s1", {
+      readFileStateScope: "project:s1:main",
+      workspaceHooks: {
+        onFileTouched: (input) => {
+          touched.push(input);
+        },
+        onFileChanged: (input) => {
+          changed.push(input);
+        },
+      },
+    });
+
+    expect(touched).toEqual([
+      expect.objectContaining({
+        sessionId: "s1",
+        filePath: readPath,
+        reason: "read",
+      }),
+    ]);
+    expect(changed).toEqual([
+      expect.objectContaining({
+        sessionId: "s1",
+        filePath: writePath,
+        beforeContent: null,
+        afterContent: "created\n",
+        operation: "created",
+      }),
+    ]);
+  });
+
   it("applies multiple edits atomically and records one diff event", async () => {
     const events: SessionEvent[] = [];
     const filePath = tmpPath("multi.txt");
@@ -103,6 +152,35 @@ describe("workspace edit tools", () => {
         beforeExists: true,
       }),
     });
+  });
+
+  it("moves files through workspace activity instead of shell mv", async () => {
+    const events: SessionEvent[] = [];
+    const fromPath = tmpPath("old-name.ts");
+    const toPath = tmpPath("new-name.ts");
+    writeFileSync(fromPath, "export const value = 1;\n");
+    prime("project:s1:main", fromPath);
+    const changed: Array<{ filePath: string; operation: string; beforeContent: string | null; afterContent: string }> = [];
+
+    const result = await moveFileTool.handler({ from_path: fromPath, to_path: toPath }, "s1", {
+      branchId: "main",
+      readFileStateScope: "project:s1:main",
+      workspaceActivity: activity(events),
+      workspaceHooks: {
+        onFileChanged: (input) => {
+          changed.push(input);
+        },
+      },
+    });
+
+    expect(String(result)).toContain("File moved");
+    expect(existsSync(fromPath)).toBe(false);
+    expect(readFileSync(toPath, "utf-8")).toBe("export const value = 1;\n");
+    expect(events.filter((event) => event.type === "diff_event")).toHaveLength(2);
+    expect(changed).toEqual([
+      expect.objectContaining({ filePath: fromPath, operation: "deleted" }),
+      expect.objectContaining({ filePath: toPath, operation: "created", beforeContent: null }),
+    ]);
   });
 
   it("preserves curly quote style across multi-edit replacements", async () => {

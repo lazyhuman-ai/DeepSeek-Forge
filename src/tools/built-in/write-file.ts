@@ -8,6 +8,7 @@ import { buildStructuredDiff } from "../../workspace/diff.js";
 import { readTextFile, writeTextFile } from "../text-file-io.js";
 import { maybeRecordPassiveTypeScriptDiagnostics } from "./passive-diagnostics.js";
 import { buildEditCheckpoint } from "./edit-checkpoint.js";
+import { notifyWorkspaceFileChanged } from "./workspace-file-hooks.js";
 
 function toolError(output: string): { output: string; isError: true } {
   return { output, isError: true };
@@ -35,7 +36,7 @@ async function handler(
 
   if (fileExists) {
     const state = readFileState.get(filePath);
-    if (!state) {
+    if (!state || state.isPartialView) {
       return toolError("File has not been read yet. Read it first before writing to it.");
     }
     const currentContent = readTextFile(filePath).content;
@@ -76,10 +77,11 @@ async function handler(
     lineEnding: state?.lineEnding ?? existingText?.lineEnding ?? "\n",
   });
 
+  const operation = fileExists ? "updated" : "created";
   context?.workspaceActivity?.recordDiff(
     sessionId,
-    buildStructuredDiff(filePath, beforeContent, content, fileExists ? "updated" : "created"),
-    context.branchId,
+    buildStructuredDiff(filePath, beforeContent, content, operation),
+    context?.branchId,
     buildEditCheckpoint({
       beforeExists: fileExists,
       beforeContent,
@@ -88,6 +90,12 @@ async function handler(
     }),
   );
   maybeRecordPassiveTypeScriptDiagnostics({ sessionId, filePath, context });
+  await notifyWorkspaceFileChanged(sessionId, {
+    filePath,
+    beforeContent: fileExists ? beforeContent : null,
+    afterContent: content,
+    operation,
+  }, context);
 
   if (fileExists) {
     return `File updated: ${filePath}`;

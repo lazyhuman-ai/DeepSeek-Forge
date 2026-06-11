@@ -440,7 +440,9 @@ export type WorkspaceActivityState = {
   }>;
   diagnostics: DiagnosticItem[];
   checks: Extract<SessionEvent, { type: "verification_event" }>[];
+  evidence: Extract<SessionEvent, { type: "evidence_event" }>[];
   shellTasks: Extract<SessionEvent, { type: "shell_task_event" }>[];
+  artifacts: Extract<SessionEvent, { type: "artifact_pointer" }>[];
   worktree?: Extract<SessionEvent, { type: "worktree_event" }>;
   permissionGrants: Extract<SessionEvent, { type: "permission_grant_event" }>[];
   recent: Array<{
@@ -467,13 +469,14 @@ export type SessionEvent =
   | { type: "diff_event"; seq: number; timestamp: string; branchId?: string; filePath: string; operation: "created" | "updated" | "deleted"; additions: number; deletions: number; summary: string; diff?: StructuredDiff }
   | { type: "diagnostic_event"; seq: number; timestamp: string; branchId?: string; source: string; status: "clean" | "issues" | "failed"; diagnostics: DiagnosticItem[]; message: string }
   | { type: "verification_event"; seq: number; timestamp: string; branchId?: string; command: string; status: "running" | "passed" | "failed"; exitCode?: number; summary: string; artifactId?: string }
+  | { type: "evidence_event"; seq: number; timestamp: string; branchId?: string; evidenceId: string; step: string; todoId?: string; status: "passed" | "failed"; evidence: Array<{ kind: "verification" | "diff" | "files" | "diagnostics" | "subagent" | "manual"; seq?: number; command?: string; path?: string; note?: string }>; matchedSeqs: number[]; message: string }
   | { type: "shell_task_event"; seq: number; timestamp: string; branchId?: string; taskId: string; action: "started" | "output" | "completed" | "failed" | "killed"; command: string; status: "running" | "completed" | "failed" | "killed"; message: string; outputPreview?: string; exitCode?: number }
-  | { type: "worktree_event"; seq: number; timestamp: string; branchId?: string; action: "entered" | "exited" | "kept" | "removed" | "failed"; path?: string; branch?: string; message: string }
+  | { type: "worktree_event"; seq: number; timestamp: string; branchId?: string; action: "entered" | "committed" | "exited" | "kept" | "removed" | "merged" | "failed"; path?: string; branch?: string; message: string }
   | { type: "permission_grant_event"; seq: number; timestamp: string; branchId?: string; grantId: string; grantKind: "workspace_edits" | "safe_commands" | "package_install" | "external_runtime" | "network_write" | "destructive_action"; action: "created" | "revoked" | "expired"; scope: "session" | "project" | "branch"; message: string; expiresAt?: string }
   | { type: "runtime_event"; seq: number; timestamp: string; branchId?: string; runtimeKind: string; detail: string; message: string }
   | { type: "branch_event"; seq: number; timestamp: string; branchId?: string; sourceBranchId: string; sourceUserMessageSeq: number; variantOfSeq: number; newBranchId: string; message: string }
   | { type: "artifact_pointer"; seq: number; timestamp: string; branchId?: string; artifactId: string; mimeType: string; sizeBytes: number }
-  | { type: "usage_event"; seq: number; timestamp: string; branchId?: string; provider: string; model: string; inputTokens: number; outputTokens: number; totalTokens: number; contextUsedPercent?: number; cacheHitTokens?: number; cacheMissTokens?: number; reasoningTokens?: number; cost?: number; currency?: string; estimated: boolean; message: string }
+  | { type: "usage_event"; seq: number; timestamp: string; branchId?: string; usageRecordId?: string; provider: string; model: string; inputTokens: number; outputTokens: number; totalTokens: number; contextWindowTokens?: number; contextUsedPercent?: number; cacheHitTokens?: number; cacheMissTokens?: number; reasoningTokens?: number; cost?: number; currency?: string; cachePrefixChanged?: boolean; cachePrefixReasons?: string[]; cacheHitRate?: number; estimated: boolean; message: string }
   | { type: "context_usage_event"; seq: number; timestamp: string; branchId?: string; source: "local_estimate"; inputTokens: number; contextWindowTokens: number; contextUsedPercent: number; estimated: true; message: string }
   | { type: "skill_used"; seq: number; timestamp: string; branchId?: string; skillName: string; filePath: string; message: string }
   | { type: "skill_event"; seq: number; timestamp: string; branchId?: string; action: string; message: string }

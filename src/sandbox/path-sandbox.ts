@@ -27,6 +27,12 @@ export type PathSandboxResolveResult =
   | { ok: false; message: string };
 
 const SENSITIVE_DIRS = new Set([
+  ".git",
+  ".vscode",
+  ".idea",
+  ".forge",
+  ".claude",
+  ".agents",
   ".ssh",
   ".gnupg",
   ".aws",
@@ -36,6 +42,15 @@ const SENSITIVE_DIRS = new Set([
 
 const SENSITIVE_FILES = [
   /^\.env(?:\..*)?$/i,
+  /^\.gitconfig$/i,
+  /^\.gitmodules$/i,
+  /^\.mcp\.json$/i,
+  /^\.bashrc$/i,
+  /^\.bash_profile$/i,
+  /^\.zshrc$/i,
+  /^\.zprofile$/i,
+  /^\.profile$/i,
+  /^\.ripgreprc$/i,
   /^\.npmrc$/i,
   /^\.pypirc$/i,
   /^\.netrc$/i,
@@ -43,6 +58,26 @@ const SENSITIVE_FILES = [
   /^id_ed25519$/i,
   /^known_hosts$/i,
 ];
+
+const GLOB_PATTERN = /[*?[\]{}]/;
+
+function unsafePathSyntaxReason(requestedPath: string, access: SandboxAccess): string | null {
+  const trimmed = requestedPath.trim();
+  if (!trimmed) return "The requested path is empty.";
+  if (trimmed.startsWith("~")) {
+    return "Tilde path variants are not accepted by workspace tools. Use an explicit absolute path inside the project workspace.";
+  }
+  if (trimmed.includes("$") || trimmed.includes("%") || trimmed.startsWith("=")) {
+    return "Shell expansion syntax is not accepted in workspace tool paths. Use the concrete resolved path inside the project workspace.";
+  }
+  if (access === "write" && GLOB_PATTERN.test(trimmed)) {
+    return "Glob patterns are not allowed for write operations. Use one exact destination path.";
+  }
+  if (trimmed.startsWith("\\\\") || trimmed.startsWith("//")) {
+    return "UNC or network-style paths are not accepted by workspace tools.";
+  }
+  return null;
+}
 
 function normalizeRoot(path: string): string {
   const absolute = resolve(path);
@@ -96,14 +131,14 @@ function pathSegments(path: string): string[] {
 
 function sensitiveReason(path: string): string | null {
   const normalized = resolve(path);
-  const segments = pathSegments(normalized);
+  const segments = pathSegments(normalized).map((segment) => segment.toLowerCase());
   for (let i = 0; i < segments.length; i++) {
     const segment = segments[i]!;
     if (SENSITIVE_DIRS.has(segment)) return `The path is inside sensitive directory '${segment}'.`;
     const two = i + 1 < segments.length ? `${segment}/${segments[i + 1]!}` : "";
     if (two && SENSITIVE_DIRS.has(two)) return `The path is inside sensitive directory '${two}'.`;
   }
-  const file = basename(normalized);
+  const file = basename(normalized).toLowerCase();
   if (SENSITIVE_FILES.some((pattern) => pattern.test(file))) {
     return `The path matches sensitive file rule '${file}'.`;
   }
@@ -155,7 +190,22 @@ export class PathSandbox {
     toolName: string,
     action?: string,
   ): PathSandboxResolveResult {
-    const absolute = resolve(requestedPath);
+    const syntaxReason = unsafePathSyntaxReason(requestedPath, access);
+    if (syntaxReason) {
+      return {
+        ok: false,
+        message: buildSandboxError({
+          toolName,
+          action: action ?? (access === "read" ? "fs.read" : "fs.write"),
+          requestedPath,
+          reason: syntaxReason,
+          allowedRoots: this.allowedRoots(access),
+        }),
+      };
+    }
+    const absolute = isAbsolute(requestedPath)
+      ? resolve(requestedPath)
+      : resolve(this.#projectRoot, requestedPath);
     const materialized = materializedPath(absolute);
     const roots = this.allowedRoots(access);
     const inside = roots.some((root) => isInside(materialized, root));

@@ -62,6 +62,10 @@ describe("git_diff", () => {
     expect(text).toContain("notes.txt");
     expect(text).toContain("-export const value = 1;");
     expect(text).toContain("+export const value = 2;");
-    expect(events.some((event) => event.type === "activity_event" && event.activityKind === "change")).toBe(true);
+    expect(events.some((event) => (
+      event.type === "activity_event" &&
+      event.activityKind === "analysis" &&
+      event.title === "Git workspace diff"
+    ))).toBe(true);
   });
 });

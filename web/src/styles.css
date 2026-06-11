@@ -593,6 +593,113 @@ body.is-resizing-column * {
   color: var(--red);
 }
 
+.work-review-banner {
+  max-width: 840px;
+  width: 100%;
+  margin: 0 auto 16px;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 14px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 12px 30px rgba(27, 31, 35, 0.07);
+  backdrop-filter: blur(16px);
+}
+
+.work-review-banner.tone-ok {
+  border-left-color: var(--green);
+}
+
+.work-review-banner.tone-warn {
+  border-left-color: var(--red);
+}
+
+.work-review-main {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+}
+
+.work-review-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.tone-ok .work-review-dot {
+  background: var(--green);
+}
+
+.tone-warn .work-review-dot {
+  background: var(--red);
+}
+
+.work-review-main strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.work-review-main p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.work-review-stats {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.work-review-stats span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 8px;
+  background: #fbfbfa;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.work-review-diff b {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.work-review-diff b:first-child {
+  color: var(--green);
+}
+
+.work-review-diff b:last-child {
+  color: var(--red);
+}
+
+.work-review-banner button {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
 .setup-panel {
   max-width: 760px;
   margin: 0 auto 28px;
@@ -2912,6 +3019,20 @@ body.is-resizing-column * {
     min-height: 38px;
     margin-bottom: 8px;
     padding-bottom: 8px;
+  }
+
+  .work-review-banner {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .work-review-stats {
+    justify-content: flex-start;
+  }
+
+  .work-review-banner button {
+    justify-self: stretch;
   }
 
   .app-shell.sidebar-collapsed .session-strip {

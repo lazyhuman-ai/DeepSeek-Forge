@@ -14,6 +14,9 @@ import { fetchWithRetry, type RetryOptions } from "../core/http-client.js";
 const logger = createLogger("deepseek-provider");
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 1_000_000;
+const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_BASE_RETRY_DELAY_MS = 1_000;
+const DEFAULT_MAX_RETRY_DELAY_MS = 30_000;
 const DEFAULT_PRICING: ModelPricing = {
   cacheHit: 0.02,
   input: 1,
@@ -41,6 +44,55 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
     err.name = "AbortError";
     throw err;
   }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+function isRetryableStreamError(err: unknown): boolean {
+  if (isAbortError(err)) return false;
+  const message = errorMessage(err).toLowerCase();
+  return message.includes("terminated")
+    || message.includes("socket")
+    || message.includes("econnreset")
+    || message.includes("econnaborted")
+    || message.includes("fetch failed")
+    || message.includes("network")
+    || message.includes("premature close")
+    || message.includes("other side closed");
+}
+
+function computeProviderRetryDelay(options: RetryOptions, attempt: number): number {
+  const base = options.baseDelayMs ?? DEFAULT_BASE_RETRY_DELAY_MS;
+  const max = options.maxDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS;
+  const exponential = Math.min(base * Math.pow(2, attempt), max);
+  return Math.round(exponential * (0.75 + Math.random() * 0.5));
+}
+
+function sleepForRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    const err = new Error("DeepSeek request aborted");
+    err.name = "AbortError";
+    return Promise.reject(err);
+  }
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timeout);
+      const err = new Error("DeepSeek request aborted");
+      err.name = "AbortError";
+      reject(err);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function parseNumberEnv(name: string): number | undefined {
@@ -174,34 +226,64 @@ export class DeepSeekProvider implements ModelProvider {
       };
     }
 
-    const resp = await fetchWithRetry(
-      `${this.#baseUrl}/v1/chat/completions`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.#apiKey}`,
-        },
-        body: JSON.stringify(body),
-      },
-      retryOptions,
-    );
-    throwIfAborted(callbacks?.signal);
+    const maxRetries = retryOptions.maxRetries ?? DEFAULT_MAX_RETRIES;
+    let attempt = 0;
+    while (true) {
+      let emittedVisibleToken = false;
+      try {
+        const resp = await fetchWithRetry(
+          `${this.#baseUrl}/v1/chat/completions`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${this.#apiKey}`,
+            },
+            body: JSON.stringify(body),
+          },
+          retryOptions,
+        );
+        throwIfAborted(callbacks?.signal);
 
-    if (!resp.ok) {
-      const errorText = await resp.text().catch(() => "unknown error");
-      logger.error("API request failed", {
-        status: resp.status,
-        statusText: resp.statusText,
-        error: errorText,
-      });
-      throw new Error(`API error ${resp.status}: ${resp.statusText} — ${errorText}`);
-    }
+        if (!resp.ok) {
+          const errorText = await resp.text().catch(() => "unknown error");
+          logger.error("API request failed", {
+            status: resp.status,
+            statusText: resp.statusText,
+            error: errorText,
+          });
+          throw new Error(`API error ${resp.status}: ${resp.statusText} — ${errorText}`);
+        }
 
-    if (!hasCallback || !resp.body) {
-      return this.#parseNonStreaming(resp);
+        if (!hasCallback || !resp.body) {
+          return await this.#parseNonStreaming(resp);
+        }
+        return await this.#parseStreaming(
+          resp.body,
+          (token) => {
+            emittedVisibleToken = true;
+            callbacks!.onToken!(token);
+          },
+          callbacks?.signal,
+        );
+      } catch (err) {
+        throwIfAborted(callbacks?.signal);
+        if (!isRetryableStreamError(err) || emittedVisibleToken || attempt >= maxRetries) {
+          throw err;
+        }
+        const delay = computeProviderRetryDelay(retryOptions, attempt);
+        callbacks?.onStatus?.(
+          `DeepSeek stream ended unexpectedly (${errorMessage(err)}); retrying in ${Math.ceil(delay / 1000)}s ` +
+          `(${attempt + 1}/${maxRetries}).`,
+        );
+        logger.warn(
+          `DeepSeek stream ended unexpectedly (${errorMessage(err)}), retrying in ${delay}ms ` +
+          `(attempt ${attempt + 1}/${maxRetries})`,
+        );
+        await sleepForRetry(delay, callbacks?.signal);
+        attempt++;
+      }
     }
-    return this.#parseStreaming(resp.body, callbacks!.onToken!, callbacks?.signal);
   }
 
   async #parseNonStreaming(resp: Response): Promise<ModelResponse> {
@@ -352,6 +434,12 @@ function convertMessage(msg: ModelMessage): Record<string, unknown> {
         arguments: JSON.stringify(tc.args),
       },
     }));
+  }
+
+  if (msg.reasoning_content) {
+    wire.reasoning_content = msg.reasoning_content;
+  } else if (msg.role === "assistant" && msg.tool_calls && msg.tool_calls.length > 0) {
+    wire.reasoning_content = "[reasoning_content unavailable in durable thread]";
   }
 
   if (msg.tool_call_id) {

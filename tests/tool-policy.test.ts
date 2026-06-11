@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
-import { ToolPolicyManager } from "../src/permissions/tool-policy.js";
+import { PermissionBroker, ToolPolicyManager } from "../src/permissions/tool-policy.js";
 import { PathSandbox } from "../src/sandbox/path-sandbox.js";
 import type { ToolDefinition } from "../src/tools/schemas.js";
 
@@ -108,6 +108,7 @@ describe("ToolPolicyManager", () => {
       "cargo check",
       "go test ./...",
       "python -m pytest",
+      "python3 -m unittest discover -s tests",
       "sed -n '1,20p' src/permissions/tool-policy.ts",
     ]) {
       const decision = policy.evaluate({
@@ -143,6 +144,30 @@ describe("ToolPolicyManager", () => {
       });
 
       expect(decision.decision, command).toBe("ask");
+    }
+  });
+
+  it("explains parser-first shell denials for heredoc, process substitution, and zsh primitives", () => {
+    const policy = new ToolPolicyManager();
+    const pathSandbox = new PathSandbox({ projectRoot: resolve(".") });
+    const cases = [
+      { command: "cat <<EOF\nsecret\nEOF", reason: "heredoc" },
+      { command: "cat <(echo hidden)", reason: "process substitution" },
+      { command: "zmodload zsh/net/tcp", reason: "zsh low-level" },
+      { command: "ztcp example.com 80", reason: "zsh low-level" },
+      { command: "print -r -- *(.)", reason: "glob qualifier" },
+    ];
+
+    for (const item of cases) {
+      const decision = policy.evaluate({
+        sessionId: "s1",
+        tool: bashTool,
+        args: { command: item.command },
+        pathSandbox,
+      });
+
+      expect(decision.decision, item.command).toBe("ask");
+      expect(decision.reason, item.command).toContain(item.reason);
     }
   });
 
@@ -187,6 +212,50 @@ describe("ToolPolicyManager", () => {
       args: { command: "rm -rf /" },
     });
     expect(denied.decision).toBe("deny");
+  });
+
+  it("hard-denies system-destructive shell commands even without custom rules", () => {
+    const policy = new ToolPolicyManager();
+    policy.setDangerouslyAllowAllTools("s1", true);
+
+    for (const command of [
+      "rm -rf /",
+      "rm -rf ~",
+      "diskutil eraseDisk APFS Forge /dev/disk9",
+      "dd if=/dev/zero of=/dev/disk9",
+      "chmod -R 777 /",
+      "shutdown -h now",
+    ]) {
+      const decision = policy.evaluate({
+        sessionId: "s1",
+        tool: bashTool,
+        args: { command },
+        pathSandbox: new PathSandbox({ projectRoot: resolve(".") }),
+      });
+
+      expect(decision.decision, command).toBe("deny");
+      expect(decision.reason, command).toMatch(/hard-denies|destructive|device|permissions|shut down/i);
+    }
+  });
+
+  it("returns the concrete deny reason in authorization errors", async () => {
+    const events: unknown[] = [];
+    const broker = new PermissionBroker({
+      nextSeq: () => 1,
+      now: () => new Date(0).toISOString(),
+      appendSessionEvent: (_sessionId, event) => events.push(event),
+    });
+
+    const result = await broker.authorize({
+      sessionId: "s1",
+      tool: bashTool,
+      args: { command: "rm -rf /" },
+      pathSandbox: new PathSandbox({ projectRoot: resolve(".") }),
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(result.allowed === false ? result.message : "").toContain("recursive forced delete");
+    expect(events).toEqual([]);
   });
 
   it("allows workspace write tools by default while sandbox remains responsible for path boundaries", () => {

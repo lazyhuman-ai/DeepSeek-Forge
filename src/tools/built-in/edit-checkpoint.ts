@@ -9,6 +9,7 @@ import { readTextFile, writeTextFile } from "../text-file-io.js";
 import type { ExecutableToolDefinition } from "../schemas.js";
 import { buildTool } from "../schemas.js";
 import { resolveToolPath } from "./path-helper.js";
+import { notifyWorkspaceFileChanged } from "./workspace-file-hooks.js";
 
 const MAX_CHECKPOINT_CONTENT_BYTES = 512 * 1024;
 
@@ -109,8 +110,14 @@ async function handler(
     context?.workspaceActivity?.recordDiff(
       sessionId,
       buildStructuredDiff(filePath, currentContent, "", "deleted"),
-      context.branchId,
+      context?.branchId,
     );
+    await notifyWorkspaceFileChanged(sessionId, {
+      filePath,
+      beforeContent: currentContent,
+      afterContent: "",
+      operation: "deleted",
+    }, context);
     return `Reverted created file by deleting: ${filePath}`;
   }
 
@@ -137,8 +144,14 @@ async function handler(
   context?.workspaceActivity?.recordDiff(
     sessionId,
     buildStructuredDiff(filePath, currentContent, previousContent, "updated"),
-    context.branchId,
+    context?.branchId,
   );
+  await notifyWorkspaceFileChanged(sessionId, {
+    filePath,
+    beforeContent: currentContent,
+    afterContent: previousContent,
+    operation: "updated",
+  }, context);
   return `Reverted latest ForgeAgent edit checkpoint for: ${filePath}`;
 }
 

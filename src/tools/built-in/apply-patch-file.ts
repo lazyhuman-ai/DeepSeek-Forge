@@ -7,6 +7,7 @@ import { buildStructuredDiff } from "../../workspace/diff.js";
 import { readTextFile, writeTextFile } from "../text-file-io.js";
 import { maybeRecordPassiveTypeScriptDiagnostics } from "./passive-diagnostics.js";
 import { buildEditCheckpoint } from "./edit-checkpoint.js";
+import { notifyWorkspaceFileChanged } from "./workspace-file-hooks.js";
 
 type PatchLine =
   | { kind: "context"; text: string }
@@ -133,7 +134,7 @@ async function handler(
   context?.workspaceActivity?.recordDiff(
     sessionId,
     buildStructuredDiff(filePath, beforeContent, applied.content, "updated"),
-    context.branchId,
+    context?.branchId,
     buildEditCheckpoint({
       beforeExists: true,
       beforeContent,
@@ -142,6 +143,12 @@ async function handler(
     }),
   );
   maybeRecordPassiveTypeScriptDiagnostics({ sessionId, filePath, context });
+  await notifyWorkspaceFileChanged(sessionId, {
+    filePath,
+    beforeContent,
+    afterContent: applied.content,
+    operation: "updated",
+  }, context);
   return `Patch applied: ${filePath}.`;
 }
 

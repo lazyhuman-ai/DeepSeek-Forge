@@ -1,13 +1,15 @@
-import { statSync, existsSync, readdirSync, readFileSync } from "node:fs";
+import { createReadStream, statSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ExecutableToolDefinition } from "../schemas.js";
 import { buildTool } from "../schemas.js";
 import { readFileStateForContext } from "../read-file-state.js";
 import { resolveToolPath, type ToolPathContext } from "./path-helper.js";
 import { readTextFile } from "../text-file-io.js";
+import { notifyWorkspaceFileTouched } from "./workspace-file-hooks.js";
 
 const MAX_LINES = 2000;
 const MAX_SIZE_BYTES = 256 * 1024;
+const MAX_STREAMED_LINES = 2000;
 const MAX_NOTEBOOK_SUMMARY_BYTES = 2 * 1024 * 1024;
 
 const BINARY_EXTENSIONS = new Set([
@@ -22,12 +24,19 @@ const BINARY_EXTENSIONS = new Set([
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"]);
 
-const DANGEROUS_DEVICE_PATHS = new Set([
+const BLOCKED_DEVICE_PATHS = new Set([
   "/dev/random",
   "/dev/urandom",
   "/dev/zero",
+  "/dev/full",
+  "/dev/stdin",
+  "/dev/stdout",
+  "/dev/stderr",
   "/dev/tty",
   "/dev/console",
+  "/dev/fd/0",
+  "/dev/fd/1",
+  "/dev/fd/2",
   "/proc/kcore",
 ]);
 
@@ -57,6 +66,17 @@ function fileExtension(filePath: string): string {
 
 function toolError(output: string): { output: string; isError: true } {
   return { output, isError: true };
+}
+
+function isBlockedDevicePath(filePath: string): boolean {
+  if (BLOCKED_DEVICE_PATHS.has(filePath)) return true;
+  if (
+    filePath.startsWith("/proc/") &&
+    (filePath.endsWith("/fd/0") || filePath.endsWith("/fd/1") || filePath.endsWith("/fd/2"))
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function readUInt16LE(buffer: Buffer, offset: number): number | undefined {
@@ -149,6 +169,39 @@ function describePdf(filePath: string, sizeBytes: number): string {
   ].join("\n");
 }
 
+async function readLargeTextRange(filePath: string, startLine: number, limit: number): Promise<{ text: string; endLine: number; hasMore: boolean }> {
+  const effectiveLimit = Math.max(1, Math.min(Math.floor(limit), MAX_STREAMED_LINES));
+  const start = Math.max(1, Math.floor(startLine));
+  const end = start + effectiveLimit - 1;
+  const collected: string[] = [];
+  let lineNo = 1;
+  let carry = "";
+  for await (const chunk of createReadStream(filePath, { encoding: "utf8" })) {
+    const text = carry + chunk;
+    const lines = text.split(/\r?\n/);
+    carry = lines.pop() ?? "";
+    for (const line of lines) {
+      if (lineNo >= start && lineNo <= end) collected.push(line);
+      lineNo++;
+      if (lineNo > end + 1) {
+        return {
+          text: collected.join("\n"),
+          endLine: Math.min(end, lineNo - 1),
+          hasMore: true,
+        };
+      }
+    }
+  }
+  if (carry || lineNo >= start) {
+    if (lineNo >= start && lineNo <= end) collected.push(carry);
+  }
+  return {
+    text: collected.join("\n"),
+    endLine: Math.min(end, lineNo),
+    hasMore: false,
+  };
+}
+
 function summarizeNotebook(filePath: string, sizeBytes: number): string | { output: string; isError: true } {
   if (sizeBytes > MAX_NOTEBOOK_SUMMARY_BYTES) {
     return toolError([
@@ -232,7 +285,7 @@ function levenshtein(a: string, b: string): number {
 
 async function handler(
   args: Record<string, unknown>,
-  _sessionId: string,
+  sessionId: string,
   context?: ToolPathContext,
 ): Promise<unknown> {
   const resolvedPath = resolveToolPath(args, context, {
@@ -246,8 +299,9 @@ async function handler(
   const readFileState = readFileStateForContext(context);
   const offset = (args.offset as number) ?? 1;
   const limit = args.limit as number | undefined;
+  const hasExplicitRange = typeof args.offset === "number" || typeof args.limit === "number";
 
-  if (DANGEROUS_DEVICE_PATHS.has(filePath)) {
+  if (isBlockedDevicePath(filePath)) {
     return {
       output: [
         "Tool sandbox blocked special device file read.",
@@ -274,35 +328,75 @@ async function handler(
 
   const ext = fileExtension(filePath);
   if (IMAGE_EXTENSIONS.has(ext)) {
+    await notifyWorkspaceFileTouched(sessionId, filePath, context, "read");
     return describeImage(filePath, stat.size);
   }
   if (ext === ".pdf") {
+    await notifyWorkspaceFileTouched(sessionId, filePath, context, "read");
     return describePdf(filePath, stat.size);
   }
   if (ext === ".ipynb") {
+    if (stat.size <= MAX_NOTEBOOK_SUMMARY_BYTES) {
+      const notebookText = readTextFile(filePath);
+      readFileState.set(filePath, {
+        content: notebookText.content,
+        mtimeMs: Math.floor(stat.mtimeMs),
+        encoding: notebookText.encoding,
+        hadBom: notebookText.hadBom,
+        lineEnding: notebookText.lineEnding,
+      });
+    }
+    await notifyWorkspaceFileTouched(sessionId, filePath, context, "read");
     return summarizeNotebook(filePath, stat.size);
   }
 
-  if (stat.size > MAX_SIZE_BYTES) {
-    return toolError(`File content (${stat.size} bytes) exceeds maximum allowed size (${MAX_SIZE_BYTES} bytes).\nRecovery: use grep to search within the file, split the file, or use a domain-specific reader for this file type.`);
-  }
-
   if (stat.size === 0) {
-    const existingState = readFileState.get(filePath);
-    if (existingState) {
-      const nextState: Parameters<typeof readFileState.set>[1] = {
-        content: "",
-        mtimeMs: Math.floor(stat.mtimeMs),
-        offset,
-      };
-      if (limit !== undefined) nextState.limit = limit;
-      readFileState.set(filePath, nextState);
-    }
+    const textFile = readTextFile(filePath);
+    const nextState: Parameters<typeof readFileState.set>[1] = {
+      content: "",
+      mtimeMs: Math.floor(stat.mtimeMs),
+      encoding: textFile.encoding,
+      hadBom: textFile.hadBom,
+      lineEnding: textFile.lineEnding,
+      offset,
+      isPartialView: offset > 1 || limit !== undefined,
+    };
+    if (limit !== undefined) nextState.limit = limit;
+    readFileState.set(filePath, nextState);
+    await notifyWorkspaceFileTouched(sessionId, filePath, context, "read");
     return "<system-reminder>This file exists but is empty.</system-reminder>";
   }
 
   if (isBinaryByExtension(filePath)) {
     return toolError(`This tool cannot read binary files. The file appears to be a binary ${ext || "unknown"} file.\nRecovery: use a domain-specific reader, artifact preview, or ask the user which content from this file is needed.`);
+  }
+
+  if (stat.size > MAX_SIZE_BYTES) {
+    if (!hasExplicitRange) {
+      return toolError([
+        "File exceeds maximum allowed size for a full read.",
+        `Path: ${filePath}`,
+        `Size: ${stat.size} bytes`,
+        `Maximum full-read size: ${MAX_SIZE_BYTES} bytes`,
+        "Recovery: use grep/file_search to find relevant sections, or call read_file again with offset and limit to stream a bounded line range.",
+      ].join("\n"));
+    }
+    const effectiveLimit = Math.min(limit ?? MAX_STREAMED_LINES, MAX_STREAMED_LINES);
+    const range = await readLargeTextRange(filePath, offset, effectiveLimit);
+    const mtimeMs = Math.floor(stat.mtimeMs);
+    readFileState.set(filePath, {
+      content: "",
+      mtimeMs,
+      offset,
+      limit: effectiveLimit,
+      isPartialView: true,
+    });
+    await notifyWorkspaceFileTouched(sessionId, filePath, context, "read");
+    const numbered = addLineNumbers(range.text, offset);
+    const reminder = range.hasMore
+      ? `\n<system-reminder>Large file streamed in partial mode. Showing lines ${offset}-${range.endLine}. Read the next ${effectiveLimit} lines using offset=${range.endLine + 1} and limit=${effectiveLimit}. Partial large-file reads do not satisfy read-before-edit; use targeted edit tools only after reading the full file or a smaller extracted file.</system-reminder>`
+      : "\n<system-reminder>Large file streamed in partial mode. Partial large-file reads do not satisfy read-before-edit; use grep or split the file before editing.</system-reminder>";
+    return `${numbered || "(no lines in requested range)"}${reminder}${CYBER_REMINDER}`;
   }
 
   const textFile = readTextFile(filePath);
@@ -318,6 +412,7 @@ async function handler(
     existingState.offset === offset &&
     existingState.limit === limit
   ) {
+    await notifyWorkspaceFileTouched(sessionId, filePath, context, "read");
     return "File unchanged since last read. The content from the earlier Read tool_result in this conversation is still current — refer to that instead of re-reading.";
   }
 
@@ -337,6 +432,7 @@ async function handler(
     };
     nextState.limit = effectiveLimit;
     readFileState.set(filePath, nextState);
+    await notifyWorkspaceFileTouched(sessionId, filePath, context, "read");
     return `<system-reminder>Warning: the file exists but is shorter than the provided offset (${startLine}). The file has ${lines.length} lines.</system-reminder>`;
   }
 
@@ -357,6 +453,7 @@ async function handler(
   };
   if (limit !== undefined) nextState.limit = limit;
   readFileState.set(filePath, nextState);
+  await notifyWorkspaceFileTouched(sessionId, filePath, context, "read");
 
   const numbered = addLineNumbers(slicedContent, startLine);
   const truncated =

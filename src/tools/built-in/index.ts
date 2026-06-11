@@ -5,18 +5,24 @@ import { editFileTool } from "./edit-file.js";
 import { bashTool } from "./bash-tool.js";
 import { enterPlanModeTool, exitPlanModeTool } from "./plan-mode.js";
 import { todoWriteTool } from "./todo-write.js";
+import { completeStepTool } from "./complete-step.js";
 import { multiEditFileTool } from "./multi-edit-file.js";
 import { applyPatchFileTool } from "./apply-patch-file.js";
+import { notebookEditTool } from "./notebook-edit.js";
 import { revertFileChangeTool } from "./edit-checkpoint.js";
 import { lspDiagnosticsTool } from "./lsp-diagnostics.js";
 import { lspQueryTool } from "./lsp-query.js";
 import { taskOutputTool } from "./task-output.js";
 import { taskKillTool } from "./task-kill.js";
-import { enterWorktreeTool, exitWorktreeTool } from "./worktree-tools.js";
+import { commitWorktreeTool, enterWorktreeTool, exitWorktreeTool, mergeWorktreeTool } from "./worktree-tools.js";
 import { gitDiffTool } from "./git-diff.js";
 import { workspaceReviewTool } from "./workspace-review.js";
-import { agentTaskTool } from "./agent-task.js";
+import { agentTaskCancelTool, agentTaskOutputTool, agentTaskTool } from "./agent-task.js";
 import { verifyWorkspaceTool } from "./verify-workspace.js";
+import { moveFileTool } from "./move-file.js";
+import { deleteFileTool } from "./delete-file.js";
+import { codeMapTool } from "./code-map.js";
+import { dependencyGraphTool } from "./dependency-graph.js";
 import { globTool } from "./glob.js";
 import { grepTool } from "./grep.js";
 import { fileSearchTool } from "./file-search.js";
@@ -45,7 +51,11 @@ export const builtInTools = [
   exitPlanModeTool,
   multiEditFileTool,
   applyPatchFileTool,
+  notebookEditTool,
+  moveFileTool,
+  deleteFileTool,
   revertFileChangeTool,
+  completeStepTool,
   todoWriteTool,
   lspDiagnosticsTool,
   lspQueryTool,
@@ -53,11 +63,17 @@ export const builtInTools = [
   taskOutputTool,
   taskKillTool,
   enterWorktreeTool,
+  commitWorktreeTool,
   exitWorktreeTool,
+  mergeWorktreeTool,
   gitDiffTool,
   verifyWorkspaceTool,
   workspaceReviewTool,
   agentTaskTool,
+  agentTaskOutputTool,
+  agentTaskCancelTool,
+  codeMapTool,
+  dependencyGraphTool,
   fileSearchTool,
   globTool,
   grepTool,

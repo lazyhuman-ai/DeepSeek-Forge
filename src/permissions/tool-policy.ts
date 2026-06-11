@@ -157,7 +157,7 @@ function firstStringArray(args: Record<string, unknown>, keys: string[]): string
 function subjectFromArgs(toolName: string, args: Record<string, unknown>): string {
   const command = firstString(args, ["command"]);
   if (command) return `Command: ${command}`;
-  const path = firstString(args, ["file_path", "path"]);
+  const path = firstString(args, ["file_path", "path", "to_path", "from_path", "destination_path", "source_path", "new_path", "old_path"]);
   if (path) return `Path: ${path}`;
   const url = firstString(args, ["url"]);
   if (url) return `URL: ${url}`;
@@ -167,7 +167,29 @@ function subjectFromArgs(toolName: string, args: Record<string, unknown>): strin
 }
 
 function pathFromArgs(args: Record<string, unknown>): string | null {
-  return firstString(args, ["file_path", "path"]);
+  return firstString(args, ["file_path", "path", "to_path", "destination_path", "new_path", "from_path", "source_path", "old_path"]);
+}
+
+function filesystemAccessForInput(capabilities: ToolCapability[]): "read" | "write" | null {
+  if (capabilities.includes("fs.write")) return "write";
+  if (capabilities.includes("fs.read")) return "read";
+  return null;
+}
+
+function materializedSensitivePathReason(
+  input: ToolPolicyInput,
+  requestedPath: string,
+  access: "read" | "write" | null,
+): string | null {
+  if (!access || !input.pathSandbox) return null;
+  const resolved = input.pathSandbox.resolvePath(
+    requestedPath,
+    access,
+    input.tool.name,
+    access === "read" ? "fs.read" : "fs.write",
+  );
+  if (!resolved.ok) return null;
+  return getSensitivePathReason(resolved.path);
 }
 
 function boolFromArgs(args: Record<string, unknown>, key: string): boolean | undefined {
@@ -198,6 +220,15 @@ function isPureFilesystemWrite(capabilities: ToolCapability[]): boolean {
 type ShellToken =
   | { type: "word"; value: string }
   | { type: "op"; value: "&&" | ";" | "|" };
+
+type ShellSecurityAst = {
+  segments: string[][];
+  operators: Array<"&&" | ";" | "|">;
+};
+
+type ShellSecurityParseResult =
+  | { ok: true; ast: ShellSecurityAst }
+  | { ok: false; reason: string };
 
 const SAFE_BASH_COMMANDS = new Set([
   "pwd",
@@ -252,6 +283,152 @@ const SAFE_COMMAND_ARG_RE = /^[A-Za-z0-9_@%+=:,./-]+$/;
 const MAX_SAFE_SHELL_COMMAND_CHARS = 8_000;
 const MAX_SAFE_SHELL_SEGMENTS = 50;
 const MAX_SAFE_SHELL_WORDS_PER_SEGMENT = 200;
+type FlagArgKind = "none" | "number" | "string";
+
+const GIT_DISPLAY_FLAGS: Record<string, FlagArgKind> = {
+  "--stat": "none",
+  "--shortstat": "none",
+  "--numstat": "none",
+  "--name-only": "none",
+  "--name-status": "none",
+  "--color": "none",
+  "--no-color": "none",
+  "--no-ext-diff": "none",
+  "--patch": "none",
+  "-p": "none",
+  "-s": "none",
+};
+
+const GIT_SAFE_FLAGS: Record<string, Record<string, FlagArgKind>> = {
+  status: {
+    "--short": "none",
+    "-s": "none",
+    "--branch": "none",
+    "-b": "none",
+    "--porcelain": "none",
+    "--porcelain=v1": "none",
+    "--porcelain=v2": "none",
+    "--ignored": "none",
+    "--untracked-files": "string",
+    "-u": "string",
+  },
+  diff: {
+    ...GIT_DISPLAY_FLAGS,
+    "--cached": "none",
+    "--staged": "none",
+    "--check": "none",
+    "--summary": "none",
+    "--word-diff": "none",
+    "--word-diff-regex": "string",
+    "--color-words": "none",
+    "--ignore-space-at-eol": "none",
+    "--ignore-space-change": "none",
+    "--ignore-all-space": "none",
+    "--ignore-blank-lines": "none",
+    "--diff-filter": "string",
+    "--find-renames": "none",
+    "--find-copies": "none",
+    "-M": "none",
+    "-C": "none",
+    "-B": "none",
+    "-R": "none",
+    "-S": "string",
+    "-G": "string",
+  },
+  log: {
+    ...GIT_DISPLAY_FLAGS,
+    "--oneline": "none",
+    "--graph": "none",
+    "--decorate": "none",
+    "--no-decorate": "none",
+    "--abbrev-commit": "none",
+    "--all": "none",
+    "--branches": "none",
+    "--tags": "none",
+    "--remotes": "none",
+    "--reverse": "none",
+    "--first-parent": "none",
+    "--merges": "none",
+    "--no-merges": "none",
+    "--max-count": "number",
+    "-n": "number",
+    "--skip": "number",
+    "--since": "string",
+    "--after": "string",
+    "--until": "string",
+    "--before": "string",
+    "--author": "string",
+    "--grep": "string",
+    "--pretty": "string",
+    "--format": "string",
+    "--diff-filter": "string",
+    "-S": "string",
+    "-G": "string",
+  },
+  show: {
+    ...GIT_DISPLAY_FLAGS,
+    "--abbrev-commit": "none",
+    "--word-diff": "none",
+    "--word-diff-regex": "string",
+    "--color-words": "none",
+    "--pretty": "string",
+    "--format": "string",
+    "--first-parent": "none",
+    "--raw": "none",
+    "--quiet": "none",
+  },
+  branch: {
+    "--all": "none",
+    "-a": "none",
+    "--remotes": "none",
+    "-r": "none",
+    "--list": "none",
+    "-l": "none",
+    "--verbose": "none",
+    "-v": "none",
+    "-vv": "none",
+    "--show-current": "none",
+    "--format": "string",
+  },
+  "rev-parse": {
+    "--show-toplevel": "none",
+    "--show-prefix": "none",
+    "--show-cdup": "none",
+    "--git-dir": "none",
+    "--is-inside-work-tree": "none",
+    "--abbrev-ref": "string",
+    "--short": "none",
+  },
+  "ls-files": {
+    "--cached": "none",
+    "--deleted": "none",
+    "--modified": "none",
+    "--others": "none",
+    "--exclude-standard": "none",
+    "--stage": "none",
+    "-s": "none",
+  },
+  grep: {
+    "-n": "none",
+    "-i": "none",
+    "-I": "none",
+    "-l": "none",
+    "--line-number": "none",
+    "--ignore-case": "none",
+    "--files-with-matches": "none",
+    "-e": "string",
+  },
+  blame: {
+    "-L": "string",
+    "--line-porcelain": "none",
+    "--porcelain": "none",
+    "--date": "string",
+  },
+  remote: {
+    "-v": "none",
+    "--verbose": "none",
+  },
+};
 
 function tokenizeShellCommand(command: string): ShellToken[] | null {
   const tokens: ShellToken[] = [];
@@ -318,8 +495,9 @@ function tokenizeShellCommand(command: string): ShellToken[] | null {
   return tokens.length > 0 ? tokens : null;
 }
 
-function splitShellSegments(tokens: ShellToken[]): string[][] | null {
+function splitShellSegments(tokens: ShellToken[]): ShellSecurityAst | null {
   const segments: string[][] = [];
+  const operators: Array<"&&" | ";" | "|"> = [];
   let current: string[] = [];
   for (const token of tokens) {
     if (token.type === "word") {
@@ -328,11 +506,51 @@ function splitShellSegments(tokens: ShellToken[]): string[][] | null {
     }
     if (current.length === 0) return null;
     segments.push(current);
+    operators.push(token.value);
     current = [];
   }
   if (current.length === 0) return null;
   segments.push(current);
-  return segments;
+  return { segments, operators };
+}
+
+function detectDangerousShellConstruct(command: string): string | null {
+  if (/<<-?\s*\S+/.test(command)) {
+    return "Shell heredoc input is not allowed by default policy because it can hide multi-line writes or script bodies.";
+  }
+  if (/[<>]\(/.test(command)) {
+    return "Shell process substitution is not allowed by default policy because it can hide implicit pipes and file descriptors.";
+  }
+  if (/(^|[\s;&|])[^ \t\n;&|]*\([^)]*[.=@xrwRW]\)(?=$|[\s;&|])/.test(command)) {
+    return "zsh glob qualifier syntax is not allowed by default policy because it can expand paths in non-obvious ways.";
+  }
+  if (/\b(?:zmodload|ztcp|zpty|sysopen|coproc)\b/.test(command)) {
+    return "zsh low-level modules or coprocess primitives are not allowed by default policy.";
+  }
+  return null;
+}
+
+function parseForSecurity(command: string): ShellSecurityParseResult {
+  // Parser-first shell AST-lite: this intentionally accepts only a small,
+  // explainable shell subset and rejects dangerous zsh/bash constructs before
+  // command allowlisting. It is not a general shell interpreter.
+  const dangerous = detectDangerousShellConstruct(command);
+  if (dangerous) return { ok: false, reason: dangerous };
+  const tokens = tokenizeShellCommand(command);
+  if (!tokens) {
+    return {
+      ok: false,
+      reason: "Shell command uses unsupported syntax such as redirection, command substitution, unterminated quotes, or unsafe control operators.",
+    };
+  }
+  const ast = splitShellSegments(tokens);
+  if (!ast) {
+    return {
+      ok: false,
+      reason: "Shell command could not be parsed into safe command segments.",
+    };
+  }
+  return { ok: true, ast };
 }
 
 function hasBlockedShellExpansion(words: string[]): boolean {
@@ -348,6 +566,48 @@ function pathTokenAllowed(input: ToolPolicyInput, token: string): boolean {
 
 function commandPathsAllowed(input: ToolPolicyInput, words: string[]): boolean {
   return words.every((word) => pathTokenAllowed(input, word));
+}
+
+function flagValueAllowed(kind: FlagArgKind, value: string): boolean {
+  if (hasBlockedShellExpansion([value])) return false;
+  if (!SAFE_COMMAND_ARG_RE.test(value)) return false;
+  if (kind === "number") return /^\d+$/.test(value);
+  return true;
+}
+
+function gitFlagsAndArgsAllowed(
+  input: ToolPolicyInput,
+  subcommand: string,
+  args: string[],
+): boolean {
+  const flagSpec = GIT_SAFE_FLAGS[subcommand] ?? {};
+  for (let index = 0; index < args.length; index++) {
+    const word = args[index]!;
+    if (word === "--") {
+      return commandPathsAllowed(input, args.slice(index + 1));
+    }
+    if (!word.startsWith("-")) {
+      if (!pathTokenAllowed(input, word)) return false;
+      continue;
+    }
+    const equalsIndex = word.indexOf("=");
+    const flag = equalsIndex > -1 ? word.slice(0, equalsIndex) : word;
+    const inlineValue = equalsIndex > -1 ? word.slice(equalsIndex + 1) : undefined;
+    const kind = flagSpec[flag] ?? flagSpec[word];
+    if (!kind) return false;
+    if (kind === "none") {
+      if (inlineValue !== undefined) return false;
+      continue;
+    }
+    const value = inlineValue ?? args[index + 1];
+    if (!value) return false;
+    // Required-argument options must not consume another option-looking token.
+    // This avoids getopt differentials such as `git diff -S -- --output=x`.
+    if (inlineValue === undefined && value.startsWith("-")) return false;
+    if (!flagValueAllowed(kind, value)) return false;
+    if (inlineValue === undefined) index++;
+  }
+  return true;
 }
 
 function safeCommandArgs(words: string[]): boolean {
@@ -378,10 +638,31 @@ function safeGitCommand(input: ToolPolicyInput, words: string[]): boolean {
   const subcommand = words[1];
   if (!subcommand || !SAFE_GIT_SUBCOMMANDS.has(subcommand)) return false;
   const args = words.slice(2);
-  if (subcommand === "remote" && args.some((word) => word !== "-v")) {
-    return false;
+  if (subcommand === "branch") {
+    const dangerousBranchFlags = new Set([
+      "-d",
+      "-D",
+      "-m",
+      "-M",
+      "-c",
+      "-C",
+      "--delete",
+      "--move",
+      "--copy",
+      "--set-upstream-to",
+      "--unset-upstream",
+      "--edit-description",
+      "--track",
+      "--no-track",
+    ]);
+    if (args.some((word) => dangerousBranchFlags.has(word) || word.startsWith("--set-upstream-to="))) {
+      return false;
+    }
+    // `git branch name` creates a branch. Keep the default-safe branch surface
+    // to read-only flags only; use dedicated worktree tools for branch changes.
+    return gitFlagsAndArgsAllowed(input, subcommand, args);
   }
-  return commandPathsAllowed(input, args);
+  return gitFlagsAndArgsAllowed(input, subcommand, args);
 }
 
 function safeSedCommand(input: ToolPolicyInput, words: string[]): boolean {
@@ -420,10 +701,9 @@ function safeBashCommandReason(input: ToolPolicyInput): string | null {
     .replace(/\s+2>\s*\/dev\/null\s*$/u, "");
   if (!command) return null;
   if (command.length > MAX_SAFE_SHELL_COMMAND_CHARS) return null;
-  const tokens = tokenizeShellCommand(command);
-  if (!tokens) return null;
-  const segments = splitShellSegments(tokens);
-  if (!segments) return null;
+  const parsed = parseForSecurity(command);
+  if (!parsed.ok) return null;
+  const { segments } = parsed.ast;
   if (
     segments.length > MAX_SAFE_SHELL_SEGMENTS ||
     segments.some((segment) => segment.length > MAX_SAFE_SHELL_WORDS_PER_SEGMENT)
@@ -442,6 +722,18 @@ function safeBashCommandReason(input: ToolPolicyInput): string | null {
   return "Read-only shell inspection commands inside the workspace are allowed by default policy.";
 }
 
+function unsafeBashParseReason(input: ToolPolicyInput): string | null {
+  if (input.tool.name !== "bash") return null;
+  const rawCommand = firstString(input.args, ["command"]);
+  const command = rawCommand
+    ?.trim()
+    .replace(/\s+2>\s*&1\s*$/u, "")
+    .replace(/\s+2>\s*\/dev\/null\s*$/u, "");
+  if (!command) return null;
+  const parsed = parseForSecurity(command);
+  return parsed.ok ? null : parsed.reason;
+}
+
 function safeVerifyWorkspaceReason(input: ToolPolicyInput): string | null {
   if (input.tool.name !== "verify_workspace") return null;
   const commands = firstStringArray(input.args, ["commands"]);
@@ -454,12 +746,66 @@ function safeVerifyWorkspaceReason(input: ToolPolicyInput): string | null {
   return null;
 }
 
+function workspaceTaskAllowReason(input: ToolPolicyInput): string | null {
+  if (input.tool.name === "agent_task") {
+    const subagentType = firstString(input.args, ["subagent_type"]) ?? "verify";
+    const toolMode = firstString(input.args, ["tool_mode"]) ?? (subagentType === "implement" ? "workspace_write" : "read_only");
+    if (subagentType === "implement" || toolMode === "workspace_write") {
+      return "Bounded implementation subagents are allowed to start by default; every nested workspace edit, command, worktree, and verification tool call still goes through PermissionBroker and PathSandbox.";
+    }
+    return "Read-only subagent coordination is allowed by default; any nested tool call still goes through normal permissions.";
+  }
+  if (input.tool.name === "agent_task_cancel") {
+    return "Cancelling a ForgeAgent background subagent task is allowed by default.";
+  }
+  if (input.tool.name === "task_kill") {
+    return "Stopping a ForgeAgent-managed background shell task is allowed by default.";
+  }
+  return null;
+}
+
+function readOnlyInPlanMode(input: ToolPolicyInput): boolean {
+  if (input.tool.name !== "agent_task") return input.tool.isReadOnly === true;
+  const subagentType = firstString(input.args, ["subagent_type"]);
+  const toolMode = firstString(input.args, ["tool_mode"]);
+  return subagentType !== "implement" && toolMode !== "workspace_write";
+}
+
 function bashPackageInstallReason(input: ToolPolicyInput): string | null {
   if (input.tool.name !== "bash") return null;
   const command = firstString(input.args, ["command"]);
   if (!command) return null;
   if (/\b(?:npm|pnpm|yarn|bun|pip|uv|brew)\s+(?:install|add|remove|uninstall|upgrade|update)\b/i.test(command)) {
     return "This shell command involves package installation or removal.";
+  }
+  return null;
+}
+
+function destructiveShellDenyReason(input: ToolPolicyInput): string | null {
+  if (input.tool.name !== "bash") return null;
+  const command = firstString(input.args, ["command"])?.trim();
+  if (!command) return null;
+  const normalized = command.replace(/\s+/g, " ");
+  if (/\brm\s+-[A-Za-z]*r[A-Za-z]*f[A-Za-z]*\s+(?:\/|\/\*|~|~\/|\$HOME(?:\/|$))/.test(normalized)) {
+    return "This command attempts a recursive forced delete of a system, home, or root path. ForgeAgent hard-denies this class of destructive command; use targeted workspace file tools or ask the user for a specific safe path.";
+  }
+  if (/\bgit\s+reset\s+--hard\b/i.test(normalized)) {
+    return "This command can discard workspace changes without a reversible ForgeAgent checkpoint. ForgeAgent hard-denies git reset --hard; inspect git_diff and use targeted revert_file_change, exit_worktree keep/remove, or ask the user for a safer recovery plan.";
+  }
+  if (/\bgit\s+push\b[\s\S]*\s--force(?:-with-lease)?\b/i.test(normalized)) {
+    return "This command force-pushes git history. ForgeAgent hard-denies force pushes from the workspace automation path.";
+  }
+  if (/\bgit\s+commit\b[\s\S]*\s--no-verify\b/i.test(normalized)) {
+    return "This command skips commit hooks. ForgeAgent hard-denies --no-verify by default because it bypasses project validation.";
+  }
+  if (/\b(?:mkfs|diskutil\s+erase\w*|shutdown|reboot|halt|poweroff)\b/i.test(normalized)) {
+    return "This command can erase disks or shut down the machine. ForgeAgent hard-denies system-destructive commands.";
+  }
+  if (/\bdd\b[\s\S]*\bof=\/dev\//i.test(normalized)) {
+    return "This command writes raw bytes to a device path. ForgeAgent hard-denies raw device writes.";
+  }
+  if (/\bchmod\s+-R\s+777\s+(?:\/|~|~\/|\$HOME(?:\/|$))/i.test(normalized)) {
+    return "This command recursively weakens permissions on a system or home path. ForgeAgent hard-denies broad permission changes.";
   }
   return null;
 }
@@ -582,7 +928,7 @@ export class ToolPolicyManager {
     const requestedPath = pathFromArgs(input.args);
 
     if (this.#planModeSessions.has(input.sessionId)) {
-      const planModeAllowed = input.tool.isReadOnly === true ||
+      const planModeAllowed = readOnlyInPlanMode(input) ||
         input.tool.name === "todo_write" ||
         input.tool.name === "ask_user" ||
         input.tool.name === "enter_plan_mode" ||
@@ -597,15 +943,6 @@ export class ToolPolicyManager {
       }
     }
 
-    if (this.#sessionAllowances.has(sessionAllowanceKey(input, action, subject))) {
-      return {
-        decision: "allow",
-        action,
-        subject,
-        reason: "This exact tool request was approved for the current session.",
-      };
-    }
-
     const matched = this.#rules
       .filter((rule) => ruleMatches(rule, input, capabilities, subject))
       .sort((a, b) => decisionRank(b.decision) - decisionRank(a.decision))[0];
@@ -618,11 +955,45 @@ export class ToolPolicyManager {
       };
     }
 
+    const destructiveShellReason = destructiveShellDenyReason(input);
+    if (destructiveShellReason) {
+      return {
+        decision: "deny",
+        action,
+        subject,
+        reason: destructiveShellReason,
+      };
+    }
+
+    const sensitivePathReason = requestedPath
+      ? getSensitivePathReason(requestedPath)
+        ?? materializedSensitivePathReason(input, requestedPath, filesystemAccessForInput(capabilities))
+      : null;
+    if (sensitivePathReason) {
+      return {
+        decision: "ask",
+        action,
+        subject,
+        reason: sensitivePathReason,
+      };
+    }
+
+    if (this.#sessionAllowances.has(sessionAllowanceKey(input, action, subject))) {
+      return {
+        decision: "allow",
+        action,
+        subject,
+        reason: "This exact tool request was approved for the current session.",
+      };
+    }
+
     if (
       (input.tool.name === "write_file" ||
         input.tool.name === "edit_file" ||
         input.tool.name === "multi_edit_file" ||
         input.tool.name === "apply_patch_file" ||
+        input.tool.name === "move_file" ||
+        input.tool.name === "delete_file" ||
         input.tool.name === "revert_file_change") &&
       this.#hasGrant(input, "workspace_edits") &&
       requestedPath &&
@@ -656,6 +1027,16 @@ export class ToolPolicyManager {
       };
     }
 
+    const workspaceTaskReason = workspaceTaskAllowReason(input);
+    if (workspaceTaskReason) {
+      return {
+        decision: "allow",
+        action,
+        subject,
+        reason: workspaceTaskReason,
+      };
+    }
+
     const packageInstallReason = bashPackageInstallReason(input);
     if (packageInstallReason && this.#hasGrant(input, "package_install")) {
       return {
@@ -685,16 +1066,6 @@ export class ToolPolicyManager {
     }
 
     if (requestedPath) {
-      const sensitive = getSensitivePathReason(requestedPath);
-      if (sensitive) {
-        return {
-          decision: "ask",
-          action,
-          subject,
-          reason: sensitive,
-        };
-      }
-
       if (isPureFilesystemWrite(capabilities) && input.pathSandbox) {
         const resolved = input.pathSandbox.resolvePath(
           requestedPath,
@@ -719,6 +1090,16 @@ export class ToolPolicyManager {
         action,
         subject,
         reason: safeBashReason,
+      };
+    }
+
+    const unsafeShellReason = unsafeBashParseReason(input);
+    if (unsafeShellReason) {
+      return {
+        decision: "ask",
+        action,
+        subject,
+        reason: unsafeShellReason,
       };
     }
 
@@ -793,6 +1174,8 @@ export class ToolPolicyManager {
       input.tool.name === "edit_file" ||
       input.tool.name === "multi_edit_file" ||
       input.tool.name === "apply_patch_file" ||
+      input.tool.name === "move_file" ||
+      input.tool.name === "delete_file" ||
       input.tool.name === "revert_file_change"
     ) {
       if (requestedPath && input.pathSandbox) {
@@ -973,7 +1356,7 @@ export class PermissionBroker {
     if (decision.decision === "deny") {
       return {
         allowed: false,
-        message: buildPermissionDeniedMessage(input.tool.name, decision, "Matched deny policy."),
+        message: buildPermissionDeniedMessage(input.tool.name, decision, decision.reason),
       };
     }
 

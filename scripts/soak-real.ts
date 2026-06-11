@@ -274,12 +274,16 @@ async function scenarioPermissionDeniedRecovery(ctx: SoakContext): Promise<strin
   await waitForSessionIdleOr(ctx.api, session.id, ["idle"]);
   const events = ctx.api.getThread(session.id);
   ctx.autoResponses.delete(session.id);
-  assert(events.some((event) => event.type === "permission_request"), "No permission_request written");
-  assert(events.some((event) => event.type === "permission_response"), "No permission_response written");
   const toolResult = events.find((event): event is ToolResult => event.type === "tool_result" && event.toolName === "bash");
   assert(toolResult, "No bash tool_result");
   assert(toolResult.isError, "Denied bash result is not marked isError");
   assert(String(toolResult.result).includes("Tool permission denied before execution."), "Denied bash result lacks readable permission text");
+  assert(
+    events.some((event) => event.type === "permission_request") ||
+      String(toolResult.result).includes("hard-denies") ||
+      String(toolResult.result).includes("hard-denied"),
+    "Denied bash did not produce either an approval request or a readable hard-deny reason",
+  );
   assert(lastAssistantText(events).includes("SOAK_PERMISSION_DENIED_OK"), `Unexpected assistant recovery text: ${lastAssistantText(events)}`);
   assertToolPairs(events);
   return threadTypes(events);

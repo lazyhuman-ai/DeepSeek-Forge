@@ -16,6 +16,8 @@ import type { ToolDefinition } from "../tools/schemas.js";
 import { compact } from "./compactor.js";
 import type { ArtifactInfo, ArtifactStore } from "../artifacts/artifact-store.js";
 import { createLogger } from "../core/logger.js";
+import type { HostVerifyCheck } from "../workspace/host-checks.js";
+import { evaluateWorkspaceReadiness } from "../workspace/readiness.js";
 
 const logger = createLogger("agent-loop");
 
@@ -28,6 +30,7 @@ const DEFAULT_ARTIFACT_PREVIEW_BYTES = 2_000;
 const DEFAULT_ARTIFACT_PER_TURN_BUDGET_CHARS = 200_000;
 const DEFAULT_CONTEXT_TOOL_RESULT_MAX_CHARS = 24_000;
 const DEFAULT_CONTEXT_PRESERVE_RECENT_TOOL_RESULTS = 8;
+const MAX_FINAL_READINESS_BLOCKS = 3;
 
 type SerializedToolOutput = {
   data: Buffer | string;
@@ -235,6 +238,7 @@ export class AgentLoop {
   #toolExecutionContext: Omit<ToolExecutionContext, "signal" | "toolUseId"> | undefined;
   #branchId: string | undefined;
   #readThread: ((sessionId: string) => SessionEvent[]) | undefined;
+  #hostChecks: HostVerifyCheck[];
 
   constructor(
     modelProvider: ModelProvider,
@@ -272,6 +276,7 @@ export class AgentLoop {
       toolExecutionContext?: Omit<ToolExecutionContext, "signal" | "toolUseId">;
       branchId?: string;
       readThread?: (sessionId: string) => SessionEvent[];
+      hostChecks?: HostVerifyCheck[];
     },
   ) {
     this.#modelProvider = modelProvider;
@@ -309,11 +314,13 @@ export class AgentLoop {
     this.#toolExecutionContext = options?.toolExecutionContext;
     this.#branchId = options?.branchId;
     this.#readThread = options?.readThread;
+    this.#hostChecks = options?.hostChecks ?? [];
   }
 
   async runTurn(sessionId: string): Promise<TurnResult> {
     logger.debug("Turn iteration starting", { sessionId });
 
+    let finalReadinessBlocks = 0;
     for (let i = 0; i < MAX_ITERATIONS; i++) {
       throwIfAborted(this.#signal);
       this.#refreshTools();
@@ -401,6 +408,61 @@ export class AgentLoop {
 
       if (response.finishReason === "stop") {
         logger.debug("Turn finished by model", { sessionId, iteration: i + 1 });
+        const latestEvents = this.#readThread?.(sessionId) ?? this.#threadStore.getThread(sessionId);
+        const readiness = evaluateWorkspaceReadiness({
+          sessionId,
+          events: latestEvents,
+          ...(this.#branchId !== undefined ? { branchId: this.#branchId } : {}),
+          ...(this.#hostChecks.length > 0 ? { hostChecks: this.#hostChecks } : {}),
+        });
+        if (!readiness.ready) {
+          finalReadinessBlocks += 1;
+          const event: RuntimeEvent = {
+            type: "runtime_event",
+            seq: this.#nextSeq(),
+            timestamp: this.#now(),
+            sessionId,
+            ...(this.#branchId ? { branchId: this.#branchId } : {}),
+            runtimeKind: "workspace_readiness",
+            detail: "degraded",
+            message: [
+              "Host final readiness gate blocked the final answer before it was sent.",
+              "The Agent must resolve these durable workspace facts before finalizing.",
+              `This is final readiness block ${finalReadinessBlocks}/${MAX_FINAL_READINESS_BLOCKS} for this turn.`,
+              "",
+              readiness.output,
+            ].join("\n"),
+          };
+          this.#threadStore.append(sessionId, event);
+          this.#onRuntimeEvent?.(sessionId, event);
+          this.#toolExecutionContext?.workspaceActivity?.recordActivity({
+            sessionId,
+            ...(this.#branchId !== undefined ? { branchId: this.#branchId } : {}),
+            activityKind: "verification",
+            status: "failed",
+            title: "Workspace final readiness gate",
+            message: `Blocked final answer: ${readiness.issues.length} readiness issue(s).`,
+            payload: {
+              ready: false,
+              ...readiness.summary,
+              issues: readiness.issues.map((issue) => issue.reason),
+              nextActions: readiness.nextActions,
+            },
+          });
+          if (finalReadinessBlocks >= MAX_FINAL_READINESS_BLOCKS) {
+            return {
+              outcome: "tool_failure",
+              runtimeKind: "workspace_readiness",
+              message: [
+                `Final readiness gate blocked ${finalReadinessBlocks} consecutive final answer attempt(s).`,
+                "The session is blocked so unresolved workspace facts stay visible instead of looping.",
+                "",
+                readiness.output,
+              ].join("\n"),
+            };
+          }
+          continue;
+        }
         const msg: AssistantMessage = {
           type: "assistant_message",
           seq: this.#nextSeq(),
@@ -427,6 +489,7 @@ export class AgentLoop {
       }
 
       if (response.finishReason === "tool_calls") {
+        finalReadinessBlocks = 0;
         logger.debug("Turn produced tool calls", {
           sessionId,
           iteration: i + 1,
@@ -459,28 +522,22 @@ export class AgentLoop {
           this.#threadStore.append(sessionId, callEvent);
         }
 
-        // Phase 2: execute — safe tools concurrently, exclusive tools sequentially
+        // Phase 2: execute in model order. Consecutive concurrency-safe tools can
+        // run together, but exclusive tools act as ordering barriers because some
+        // of them mutate the per-turn execution context (for example worktree
+        // tools changing the active project root).
         const results = new Array<{
           tc: typeof toolCalls[number];
           output: unknown;
           isError: boolean;
         } | null>(toolCalls.length).fill(null);
 
-        // Execute parallel-safe tools concurrently
-        const safeIndices: number[] = [];
-        const exclusiveIndices: number[] = [];
-        for (let i = 0; i < toolCalls.length; i++) {
-          const def = this.#toolDefs.get(toolCalls[i]!.name);
-          if (def?.isConcurrencySafe) {
-            safeIndices.push(i);
-          } else {
-            exclusiveIndices.push(i);
-          }
-        }
-
-        if (safeIndices.length > 0) {
+        const safeBatch: number[] = [];
+        const flushSafeBatch = async (): Promise<void> => {
+          if (safeBatch.length === 0) return;
+          const indices = safeBatch.splice(0);
           const safeResults = await Promise.all(
-            safeIndices.map(async (i) => {
+            indices.map(async (i) => {
               const result = await this.#executeTool(toolCalls[i]!, sessionId);
               return { index: i, result };
             }),
@@ -492,18 +549,24 @@ export class AgentLoop {
               isError: result.isError,
             };
           }
-        }
+        };
 
-        // Execute exclusive tools sequentially
-        for (const i of exclusiveIndices) {
+        for (let i = 0; i < toolCalls.length; i++) {
           throwIfAborted(this.#signal);
-          const result = await this.#executeTool(toolCalls[i]!, sessionId);
+          const def = this.#toolDefs.get(toolCalls[i]!.name);
+          if (def?.isConcurrencySafe) {
+            safeBatch.push(i);
+            continue;
+          }
+          await flushSafeBatch();
+          const result = await this.#executeTool(toolCalls[i]!, sessionId, { mutableContext: true });
           results[i] = {
             tc: toolCalls[i]!,
             output: result.output,
             isError: result.isError,
           };
         }
+        await flushSafeBatch();
 
         // Phase 3: prepare and append all ToolResult events in original order
         const preparedResults = this.#prepareToolResults(sessionId, results);
@@ -612,19 +675,26 @@ export class AgentLoop {
   async #executeTool(
     tc: { id: string; name: string; args: Record<string, unknown> },
     sessionId: string,
+    options?: { mutableContext?: boolean },
   ): Promise<{ output: unknown; isError: boolean }> {
     try {
       throwIfAborted(this.#signal);
+      const executionContext = this.#toolExecutionContext && options?.mutableContext
+        ? Object.assign(this.#toolExecutionContext, {
+          toolUseId: tc.id,
+          ...(this.#signal ? { signal: this.#signal } : {}),
+        })
+        : {
+          ...(this.#toolExecutionContext ?? {}),
+          toolUseId: tc.id,
+          ...(this.#signal ? { signal: this.#signal } : {}),
+        };
       const result = await raceAbort(
         this.#toolExecutor.execute(
           tc.name,
           tc.args,
           sessionId,
-          {
-            ...(this.#toolExecutionContext ?? {}),
-            toolUseId: tc.id,
-            ...(this.#signal ? { signal: this.#signal } : {}),
-          },
+          executionContext,
         ),
         this.#signal,
       );

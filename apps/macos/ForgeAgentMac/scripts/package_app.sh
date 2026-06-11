@@ -16,9 +16,53 @@ print(os.path.realpath(sys.argv[1]))
 PY
 )"
 
+LAUNCHD_LABEL="com.forgeagent.gateway"
+LAUNCHD_DOMAIN="gui/$(id -u)"
+LAUNCHD_PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+LAUNCHD_START="$HOME/Library/Application Support/ForgeAgent/launchd-start.sh"
+DIST_SERVICE_WAS_LOADED=0
+DIST_SERVICE_STOPPED=0
+
+restore_dist_app_service() {
+  if [[ "$DIST_SERVICE_STOPPED" != "1" ]] || [[ "$DIST_SERVICE_WAS_LOADED" != "1" ]]; then
+    return
+  fi
+  if [[ ! -f "$LAUNCHD_PLIST" ]]; then
+    echo "ForgeAgent launchd plist was removed while packaging; not restoring $LAUNCHD_LABEL" >&2
+    return
+  fi
+  launchctl bootstrap "$LAUNCHD_DOMAIN" "$LAUNCHD_PLIST" >/dev/null 2>&1 || true
+  launchctl kickstart -k "$LAUNCHD_DOMAIN/$LAUNCHD_LABEL" >/dev/null 2>&1 || true
+}
+
+stop_running_dist_app() {
+  if [[ -f "$LAUNCHD_START" ]] && grep -Fq "$APP/Contents/" "$LAUNCHD_START"; then
+    if launchctl print "$LAUNCHD_DOMAIN/$LAUNCHD_LABEL" >/dev/null 2>&1; then
+      DIST_SERVICE_WAS_LOADED=1
+    fi
+    launchctl bootout "$LAUNCHD_DOMAIN/$LAUNCHD_LABEL" >/dev/null 2>&1 \
+      || launchctl bootout "$LAUNCHD_DOMAIN" "$LAUNCHD_PLIST" >/dev/null 2>&1 \
+      || true
+    DIST_SERVICE_STOPPED=1
+    trap restore_dist_app_service EXIT
+  fi
+
+  for _ in 1 2 3 4 5; do
+    if ! pgrep -f "$APP/Contents/" >/dev/null 2>&1; then
+      return
+    fi
+    pkill -TERM -f "$APP/Contents/" || true
+    sleep 0.2
+  done
+  pkill -KILL -f "$APP/Contents/" || true
+}
+
 cd "$PROJECT_ROOT"
 npm run product:build
 swift build -c release --package-path "$ROOT"
+if [[ "${FORGEAGENT_PACKAGE_SKIP_SERVICE_MANAGEMENT:-0}" != "1" ]]; then
+  stop_running_dist_app
+fi
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$RESOURCES/node/bin" "$CORE"
 cp "$BIN" "$APP/Contents/MacOS/ForgeAgentMac"
