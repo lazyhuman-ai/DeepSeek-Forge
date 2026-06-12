@@ -102,10 +102,10 @@ npm run macos:package
 Open it:
 
 ```sh
-open apps/macos/ForgeAgentMac/dist/ForgeAgent.app
+open apps/macos/ForgeAgentMac/dist/DeepSeek-Forge.app
 ```
 
-You should see the ForgeAgent window. The macOS App starts or reuses the local Forge Core, then loads the same Web Console used in the browser.
+You should see the DeepSeek-Forge window. The macOS App starts or reuses the local Forge Core, then loads the same Web Console used in the browser.
 
 If the app shows a setup screen, configure your model provider:
 
@@ -213,12 +213,12 @@ Enable it:
 npm run mcp -- enable blender --data-dir "$DATA_DIR"
 ```
 
-Restart ForgeAgent Core from the app:
+Restart DeepSeek-Forge Core from the app:
 
-1. In the ForgeAgent window, click **Restart Core** if you see it.
-2. Or quit and reopen `ForgeAgent.app`.
+1. In the DeepSeek-Forge window, click **Restart Core** if you see it.
+2. Or quit and reopen `DeepSeek-Forge.app`.
 
-Then open the MCP panel in ForgeAgent and click **Retry** or **Connect** for Blender.
+Then open the MCP panel in DeepSeek-Forge and click **Retry** or **Connect** for Blender.
 
 You can also run this command as a standalone check:
 
@@ -451,14 +451,14 @@ Run step 4.2 again and keep that Blender window open.
 
 Click **Retry** or **Connect** in the MCP panel.
 
-If you installed it from Terminal instead of the UI, restart ForgeAgent Core first:
+If you installed it from Terminal instead of the UI, restart DeepSeek-Forge Core first:
 
 ```sh
 npm run macos:package
-open apps/macos/ForgeAgentMac/dist/ForgeAgent.app
+open apps/macos/ForgeAgentMac/dist/DeepSeek-Forge.app
 ```
 
-### ForgeAgent asks for too many approvals
+### DeepSeek-Forge asks for too many approvals
 
 For this tutorial session, click **Allow for this session** on the first Blender MCP permission request.
 
@@ -466,7 +466,7 @@ If you understand the risk and only use your own local Blender MCP setup, you ca
 
 ### The PNG file is missing
 
-Ask ForgeAgent:
+Ask DeepSeek-Forge:
 
 ```text
 请检查刚刚的 Blender MCP 任务为什么没有输出 PNG。继续使用 mcp__blender__get_scene_info 和 mcp__blender__execute_blender_code 修复，然后重新渲染。
@@ -476,12 +476,12 @@ Ask ForgeAgent:
 
 Try:
 
-1. Click **Restart Core** in the ForgeAgent window.
+1. Click **Restart Core** in the DeepSeek-Forge window.
 2. If it still fails, in Terminal run:
 
 ```sh
 npm run macos:package
-open apps/macos/ForgeAgentMac/dist/ForgeAgent.app
+open apps/macos/ForgeAgentMac/dist/DeepSeek-Forge.app
 ```
 
 3. Open logs from the app menu or run:

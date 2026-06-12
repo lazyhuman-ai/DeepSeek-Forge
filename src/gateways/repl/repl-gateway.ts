@@ -99,8 +99,8 @@ export class ReplGateway implements Gateway {
   // ── Lifecycle ──
 
   start(): void {
-    logger.info("ForgeAgent REPL started");
-    console.log(`\n${B}ForgeAgent REPL${R}\n`);
+    logger.info("DeepSeek-Forge REPL started");
+    console.log(`\n${B}DeepSeek-Forge REPL${R}\n`);
     console.log(`${D}Type a message to chat, or !help for commands.${R}\n`);
     this.#rl.prompt();
   }

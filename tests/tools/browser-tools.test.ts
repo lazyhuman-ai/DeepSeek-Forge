@@ -47,20 +47,20 @@ describe("browser built-in tools", () => {
     clearBrowserRuntimesForTools();
   });
 
-  it("returns a ForgeWebridge setup prompt when default browser runtime is not ready", async () => {
+  it("returns a DeepSeek-Forge Webridge setup prompt when default browser runtime is not ready", async () => {
     const result = await browserNavigateTool.handler(
       { url: "https://example.com" },
       "s1",
     );
 
     const error = expectToolError(result);
-    expect(String(error.output)).toContain("ForgeWebridge browser connection is not ready");
+    expect(String(error.output)).toContain("DeepSeek-Forge Webridge browser connection is not ready");
     expect(String(error.output)).toContain("Tool: browser_navigate");
-    expect(String(error.output)).toContain("install or refresh the ForgeWebridge Chrome extension");
+    expect(String(error.output)).toContain("install or refresh the DeepSeek-Forge Webridge Chrome extension");
     expect(String(error.output)).toContain("runtime\":\"chrome");
   });
 
-  it("defaults browser tools to ForgeWebridge even when another runtime is registered first", async () => {
+  it("defaults browser tools to DeepSeek-Forge Webridge even when another runtime is registered first", async () => {
     const chromeRuntime = fakeRuntime();
     const webridgeRuntime = fakeRuntime();
     setBrowserRuntimeForTools("chrome", chromeRuntime);

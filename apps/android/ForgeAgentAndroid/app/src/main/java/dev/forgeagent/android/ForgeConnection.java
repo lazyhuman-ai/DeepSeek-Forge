@@ -29,7 +29,7 @@ public final class ForgeConnection {
         ForgeConnection connection = new ForgeConnection();
         connection.connectionId = UUID.randomUUID().toString();
         connection.coreId = safe(coreId);
-        connection.name = safe(name).isEmpty() ? "ForgeAgent Desktop" : safe(name);
+        connection.name = safe(name).isEmpty() ? "DeepSeek-Forge Desktop" : safe(name);
         connection.token = safe(token);
         connection.status = "unknown";
         connection.statusMessage = "Not checked yet.";
@@ -51,7 +51,7 @@ public final class ForgeConnection {
         ForgeConnection connection = new ForgeConnection();
         connection.connectionId = json.optString("connectionId", UUID.randomUUID().toString());
         connection.coreId = json.optString("coreId", "");
-        connection.name = json.optString("name", "ForgeAgent Desktop");
+        connection.name = json.optString("name", "DeepSeek-Forge Desktop");
         connection.token = json.optString("token", "");
         connection.recommendedEndpoint = json.optString("recommendedEndpoint", "");
         connection.lastWorkingEndpoint = json.optString("lastWorkingEndpoint", "");
@@ -119,7 +119,7 @@ public final class ForgeConnection {
 
     public void markOffline(String message) {
         status = "offline";
-        statusMessage = message == null || message.isEmpty() ? "ForgeAgent is not reachable." : message;
+        statusMessage = message == null || message.isEmpty() ? "DeepSeek-Forge is not reachable." : message;
     }
 
     public String displayEndpoint() {
@@ -137,9 +137,9 @@ public final class ForgeConnection {
     public static String hostLabel(String value) {
         try {
             URL url = new URL(value);
-            return url.getHost() == null || url.getHost().isEmpty() ? "ForgeAgent Desktop" : url.getHost();
+            return url.getHost() == null || url.getHost().isEmpty() ? "DeepSeek-Forge Desktop" : url.getHost();
         } catch (Exception ignored) {
-            return value == null || value.isEmpty() ? "ForgeAgent Desktop" : value;
+            return value == null || value.isEmpty() ? "DeepSeek-Forge Desktop" : value;
         }
     }
 

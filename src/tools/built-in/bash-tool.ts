@@ -43,7 +43,7 @@ function truncateOutput(stdout: string, stderr: string): string {
   let result = "";
   if (stdout) {
     if (stdout.length > MAX_OUTPUT_LENGTH) {
-      result += `[large stdout: ${stdout.length} chars; complete stdout follows and may be artifactized by ForgeAgent]\n`;
+      result += `[large stdout: ${stdout.length} chars; complete stdout follows and may be artifactized by DeepSeek-Forge]\n`;
       result += stdout;
     } else {
       result += stdout;
@@ -52,7 +52,7 @@ function truncateOutput(stdout: string, stderr: string): string {
   if (stderr) {
     if (result) result += "\n";
     if (stderr.length > MAX_OUTPUT_LENGTH) {
-      result += `[large stderr: ${stderr.length} chars; complete stderr follows and may be artifactized by ForgeAgent]\n`;
+      result += `[large stderr: ${stderr.length} chars; complete stderr follows and may be artifactized by DeepSeek-Forge]\n`;
       result += stderr;
     } else {
       result += stderr;

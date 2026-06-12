@@ -3,7 +3,7 @@ import { ToolRegistry } from "../tools/tool-registry.js";
 import type { ExtensionInstallInput } from "../extensions/types.js";
 
 function usage(): void {
-  console.log(`ForgeAgent Extensions
+  console.log(`DeepSeek-Forge Extensions
 
 Usage:
   npm run extensions -- status
@@ -76,7 +76,7 @@ async function main(): Promise<void> {
 
   if (command === "doctor") {
     const status = api.getExtensions();
-    console.log(`ForgeAgent extension doctor`);
+    console.log(`DeepSeek-Forge extension doctor`);
     console.log(`Installed: ${status.counts.installed}`);
     console.log(`Enabled: ${status.counts.enabled}`);
     console.log(`Attention: ${status.counts.quarantined + status.counts.invalid}`);

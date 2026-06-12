@@ -743,7 +743,7 @@ export class McpRuntimeManager {
     }
     const entry: ConnectedServer = {
       config: server,
-      client: new Client({ name: "ForgeAgent MCP Client", version: "0.1.0" }),
+      client: new Client({ name: "DeepSeek-Forge MCP Client", version: "0.1.0" }),
       transport: {} as Transport,
       state: server.enabled ? "configured" : "disabled",
       capabilities: {},
@@ -798,7 +798,7 @@ export class McpRuntimeManager {
     if (server.allowSampling === true) capabilities.sampling = {};
     if (server.allowElicitation === true) capabilities.elicitation = { form: {}, url: {} };
     const client = new Client(
-      { name: "ForgeAgent MCP Client", version: "0.1.0" },
+      { name: "DeepSeek-Forge MCP Client", version: "0.1.0" },
       {
         capabilities: capabilities as never,
         listChanged: {

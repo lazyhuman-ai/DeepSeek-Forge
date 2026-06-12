@@ -116,7 +116,7 @@ const BUILTIN_CATALOG: McpCatalogEntry[] = [
       env: [
         {
           name: "GITHUB_PERSONAL_ACCESS_TOKEN",
-          prompt: "GitHub personal access token with the repository scopes you want ForgeAgent to use.",
+          prompt: "GitHub personal access token with the repository scopes you want DeepSeek-Forge to use.",
           required: true,
           secret: true,
         },
@@ -183,7 +183,7 @@ const BUILTIN_CATALOG: McpCatalogEntry[] = [
       env: [
         {
           name: "POSTGRES_CONNECTION_STRING",
-          prompt: "Postgres connection string for the database ForgeAgent may inspect.",
+          prompt: "Postgres connection string for the database DeepSeek-Forge may inspect.",
           required: true,
           secret: true,
         },
@@ -290,7 +290,7 @@ const BUILTIN_CATALOG: McpCatalogEntry[] = [
       "codegraph_status",
       "codegraph_trace",
     ],
-    postInstall: "ForgeAgent downloads and verifies CodeGraph v0.9.7, initializes .codegraph/ in the current project, then starts it as a background read-only MCP server.",
+    postInstall: "DeepSeek-Forge downloads and verifies CodeGraph v0.9.7, initializes .codegraph/ in the current project, then starts it as a background read-only MCP server.",
     tags: ["code", "codegraph", "architecture", "impact-analysis", "symbol-search"],
   },
 ];

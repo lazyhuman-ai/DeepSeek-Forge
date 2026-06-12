@@ -124,7 +124,7 @@ function truncateOutput(output: string): string {
   if (output.length <= MAX_INLINE_OUTPUT_NOTICE_LENGTH) return output || "(no output)";
   return [
     `[large verification output: ${output.length} chars]`,
-    "The complete output is preserved in this tool result and may be artifactized by ForgeAgent.",
+    "The complete output is preserved in this tool result and may be artifactized by DeepSeek-Forge.",
     output,
   ].join("\n");
 }
@@ -347,7 +347,7 @@ export const verifyWorkspaceTool: ExecutableToolDefinition = buildTool({
   params: {
     commands: {
       type: "array",
-      description: "Optional explicit safe verification commands. If omitted, ForgeAgent detects a quick project check from package.json.",
+      description: "Optional explicit safe verification commands. If omitted, DeepSeek-Forge detects a quick project check from package.json.",
       items: {
         type: "string",
         description: "A safe verification command.",

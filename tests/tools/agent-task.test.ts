@@ -78,7 +78,7 @@ describe("agent_task", () => {
 
     expect(String(result)).toContain("VERDICT: PASS");
     expect(capturedTools).toBeUndefined();
-    expect(capturedMessages.map((message) => message.content).join("\n")).toContain("read-only ForgeAgent workspace subagent");
+    expect(capturedMessages.map((message) => message.content).join("\n")).toContain("read-only DeepSeek-Forge workspace subagent");
     expect(capturedMessages.map((message) => message.content).join("\n")).toContain("skeptical release reviewer");
     expect(capturedMessages.map((message) => message.content).join("\n")).toContain("If evidence is missing, stale, narrow, or only implied by intent, treat it as not proven.");
     expect(capturedMessages.map((message) => message.content).join("\n")).toContain("Do not write PASS based only on source reading.");

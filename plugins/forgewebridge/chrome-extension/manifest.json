@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ForgeWebridge",
+  "name": "DeepSeek-Forge Webridge",
   "version": "0.5.3",
-  "description": "Bridge ForgeAgent browser tools to this Chrome profile's visible logged-in pages.",
+  "description": "Bridge DeepSeek-Forge browser tools to this Chrome profile's visible logged-in pages.",
   "permissions": [
     "alarms",
     "scripting",
@@ -30,7 +30,7 @@
   },
   "options_page": "options.html",
   "action": {
-    "default_title": "ForgeWebridge",
+    "default_title": "DeepSeek-Forge Webridge",
     "default_popup": "options.html",
     "default_icon": {
       "16": "icons/icon16.png",

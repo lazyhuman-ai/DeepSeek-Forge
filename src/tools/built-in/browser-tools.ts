@@ -15,7 +15,7 @@ type BrowserToolArgs = Record<string, unknown>;
 
 const runtimeParam: ToolParamSchema = {
   type: "string",
-  description: "Optional browser runtime name. Omit to use the default ForgeWebridge Chrome extension runtime.",
+  description: "Optional browser runtime name. Omit to use the default DeepSeek-Forge Webridge Chrome extension runtime.",
   optional: true,
 };
 
@@ -54,13 +54,13 @@ function resolveRuntime(
   return {
     isError: true,
     output: [
-      "ForgeWebridge browser connection is not ready before execution.",
+      "DeepSeek-Forge Webridge browser connection is not ready before execution.",
       `Tool: ${toolName}`,
       `Requested action: ${action}`,
-      runtimeName ? `Requested runtime: ${runtimeName}` : "Requested runtime: default ForgeWebridge runtime",
+      runtimeName ? `Requested runtime: ${runtimeName}` : "Requested runtime: default DeepSeek-Forge Webridge runtime",
       `Available runtimes: ${known.length > 0 ? known.join(", ") : "none"}`,
-      "Reason: Browser tools default to the ForgeWebridge Chrome extension, but that runtime is not registered in this process.",
-      "Recovery: Start the ForgeAgent HTTP gateway, install or refresh the ForgeWebridge Chrome extension, pair it with the gateway, then retry. If you intentionally want CDP instead, pass an explicit runtime name such as {\"runtime\":\"chrome\"}.",
+      "Reason: Browser tools default to the DeepSeek-Forge Webridge Chrome extension, but that runtime is not registered in this process.",
+      "Recovery: Start the DeepSeek-Forge HTTP gateway, install or refresh the DeepSeek-Forge Webridge Chrome extension, pair it with the gateway, then retry. If you intentionally want CDP instead, pass an explicit runtime name such as {\"runtime\":\"chrome\"}.",
     ].join("\n"),
   };
 }

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config xmlns:tools="http://schemas.android.com/tools">
-    <!-- ForgeAgent is private-network-first and commonly served from a Mac over LAN HTTP. -->
+    <!-- DeepSeek-Forge is private-network-first and commonly served from a Mac over LAN HTTP. -->
     <base-config
         cleartextTrafficPermitted="true"
         tools:ignore="InsecureBaseConfiguration" />

@@ -21,7 +21,7 @@ function assertFreshRead(
   if (!state || state.isPartialView) {
     return {
       ok: false,
-      output: `${role === "source" ? "Source" : "Destination"} file has not been fully read yet. Read it first before moving so ForgeAgent can detect stale content and record a reversible checkpoint.`,
+      output: `${role === "source" ? "Source" : "Destination"} file has not been fully read yet. Read it first before moving so DeepSeek-Forge can detect stale content and record a reversible checkpoint.`,
     };
   }
   const text = readTextFile(filePath);
@@ -191,7 +191,7 @@ async function handler(
 
 export const moveFileTool: ExecutableToolDefinition = buildTool({
   name: "move_file",
-  description: "Moves or renames a file or directory inside the workspace while recording durable diff/activity evidence. Prefer this over shell mv so ForgeAgent can review and recover from changes.",
+  description: "Moves or renames a file or directory inside the workspace while recording durable diff/activity evidence. Prefer this over shell mv so DeepSeek-Forge can review and recover from changes.",
   params: {
     from_path: {
       type: "string",

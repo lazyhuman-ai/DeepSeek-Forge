@@ -32,7 +32,7 @@ els.pair.addEventListener("click", () => {
 });
 
 els.forget.addEventListener("click", () => {
-  void chrome.storage.local.remove(["token", "clientId"]).then(() => renderStatus("Disconnected from ForgeAgent."));
+  void chrome.storage.local.remove(["token", "clientId"]).then(() => renderStatus("Disconnected from DeepSeek-Forge."));
 });
 
 els.diagnostics.addEventListener("click", () => {
@@ -55,7 +55,7 @@ async function load() {
   ]);
   els.baseUrl.value = cfg.baseUrl || DEFAULT_BASE_URL;
   els.enabled.checked = cfg.enabled !== false;
-  els.deviceName.value = cfg.deviceName || "ForgeWebridge Chrome";
+  els.deviceName.value = cfg.deviceName || "DeepSeek-Forge Webridge Chrome";
   await renderStatus();
 }
 
@@ -66,7 +66,7 @@ async function refreshConnection() {
   try {
     const response = await chrome.runtime.sendMessage({ type: "forgewebridge.refresh" });
     if (!response?.ok) {
-      throw new Error(response?.error || "ForgeWebridge background refresh failed.");
+      throw new Error(response?.error || "DeepSeek-Forge Webridge background refresh failed.");
     }
     await renderStatus("Connection refreshed.");
   } catch (err) {
@@ -80,7 +80,7 @@ async function saveSettings(options = {}) {
   await chrome.storage.local.set({
     baseUrl: normalizedBaseUrl(),
     enabled: els.enabled.checked,
-    deviceName: els.deviceName.value.trim() || "ForgeWebridge Chrome",
+    deviceName: els.deviceName.value.trim() || "DeepSeek-Forge Webridge Chrome",
     autoDiscover: true,
   });
   if (!options.silent) await renderStatus("Settings saved.");
@@ -99,7 +99,7 @@ async function pairWithCode(code) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         code,
-        name: els.deviceName.value.trim() || "ForgeWebridge Chrome",
+        name: els.deviceName.value.trim() || "DeepSeek-Forge Webridge Chrome",
         kind: "web",
       }),
     });
@@ -113,7 +113,7 @@ async function pairWithCode(code) {
       enabled: true,
     });
     els.pairCode.value = "";
-    await renderStatus("Paired. ForgeWebridge will connect automatically.");
+    await renderStatus("Paired. DeepSeek-Forge Webridge will connect automatically.");
   } catch (err) {
     await renderStatus(`Pairing failed: ${errorMessage(err)}`);
   }
@@ -124,7 +124,7 @@ async function copyDiagnostics() {
   try {
     const response = await chrome.runtime.sendMessage({ type: "forgewebridge.diagnostics" });
     if (!response?.ok) {
-      throw new Error(response?.error || "ForgeWebridge diagnostics failed.");
+      throw new Error(response?.error || "DeepSeek-Forge Webridge diagnostics failed.");
     }
     const text = JSON.stringify(response.result, null, 2);
     await navigator.clipboard.writeText(text);
@@ -157,7 +157,7 @@ async function renderStatus(prefix = "") {
     prefix,
     messageForState(state, status.message, !!cfg.token),
   ].filter(Boolean).join(" ");
-  els.versionPill.textContent = `ForgeWebridge ${chrome.runtime.getManifest().version}`;
+  els.versionPill.textContent = `DeepSeek-Forge Webridge ${chrome.runtime.getManifest().version}`;
 
   const lines = [];
   lines.push(`Enabled: ${cfg.enabled !== false ? "yes" : "no"}`);
@@ -180,16 +180,16 @@ function titleForState(state, hasToken) {
   if (state === "connected") return "Chrome is connected";
   if (state === "disabled") return "Bridge is disabled";
   if (state === "error") return "Connection needs attention";
-  if (hasToken) return "Connecting to ForgeAgent";
-  return "Waiting for ForgeAgent";
+  if (hasToken) return "Connecting to DeepSeek-Forge";
+  return "Waiting for DeepSeek-Forge";
 }
 
 function messageForState(state, message, hasToken) {
   if (message) return message;
-  if (state === "connected") return "ForgeAgent can now use browser tools in this Chrome profile.";
-  if (state === "disabled") return "Enable the bridge or refresh the connection when you want ForgeAgent to use Chrome.";
-  if (hasToken) return "ForgeWebridge is pairing with the local gateway.";
-  return "Start ForgeAgent, then click Refresh connection.";
+  if (state === "connected") return "DeepSeek-Forge can now use browser tools in this Chrome profile.";
+  if (state === "disabled") return "Enable the bridge or refresh the connection when you want DeepSeek-Forge to use Chrome.";
+  if (hasToken) return "DeepSeek-Forge Webridge is pairing with the local gateway.";
+  return "Start DeepSeek-Forge, then click Refresh connection.";
 }
 
 function normalizedBaseUrl() {

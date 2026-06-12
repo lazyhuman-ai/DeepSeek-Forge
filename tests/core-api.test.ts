@@ -86,7 +86,7 @@ describe("CoreAPI", () => {
     });
     const session = api.createSession("New session");
 
-    api.appendUserMessage(session.id, "请设计 ForgeAgent 的工具权限系统", { dispatch: false });
+    api.appendUserMessage(session.id, "请设计 DeepSeek-Forge 的工具权限系统", { dispatch: false });
 
     await waitUntil(() => api.getSession(session.id)?.title === "工具权限设计");
     expect(receivedTools).toBeUndefined();
@@ -407,7 +407,7 @@ describe("CoreAPI", () => {
     const { execFileSync } = await import("node:child_process");
     execFileSync("git", ["init"], { cwd: workspace, stdio: "ignore" });
     execFileSync("git", ["config", "user.email", "forgeagent@example.test"], { cwd: workspace, stdio: "ignore" });
-    execFileSync("git", ["config", "user.name", "ForgeAgent Test"], { cwd: workspace, stdio: "ignore" });
+    execFileSync("git", ["config", "user.name", "DeepSeek-Forge Test"], { cwd: workspace, stdio: "ignore" });
     writeFileSync(join(workspace, "README.md"), "hello\n");
     execFileSync("git", ["add", "README.md"], { cwd: workspace, stdio: "ignore" });
     execFileSync("git", ["commit", "-m", "initial"], { cwd: workspace, stdio: "ignore" });
@@ -959,7 +959,7 @@ describe("CoreAPI", () => {
         if (call === 2) {
           expect(tools?.some((tool) => tool.name === "read_file")).toBe(true);
           expect(tools?.some((tool) => tool.name === "edit_file")).toBe(false);
-          expect(messages.map((message) => message.content).join("\n")).toContain("read-only ForgeAgent workspace subagent");
+          expect(messages.map((message) => message.content).join("\n")).toContain("read-only DeepSeek-Forge workspace subagent");
           return {
             text: "VERDICT: PASS\nEVIDENCE: durable activity is consistent.\nRISKS: none.\nREQUIRED NEXT ACTIONS: none.",
             finishReason: "stop",

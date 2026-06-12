@@ -4,7 +4,7 @@ import { WebridgeRuntime } from "../src/runtimes/webridge/webridge-runtime.js";
 describe("WebridgeRuntime", () => {
   it("queues browser commands for a connected Chrome extension client", async () => {
     const runtime = new WebridgeRuntime({ commandTimeoutMs: 1_000 });
-    const client = runtime.registerClient({ name: "ForgeWebridge Test" });
+    const client = runtime.registerClient({ name: "DeepSeek-Forge Webridge Test" });
 
     const createPromise = runtime.createTab("s1");
     const command = await runtime.pollCommand(client.clientId, 10);
@@ -56,7 +56,7 @@ describe("WebridgeRuntime", () => {
   it("returns a readable setup error when no extension client is connected", async () => {
     const runtime = new WebridgeRuntime({ commandTimeoutMs: 1_000 });
 
-    await expect(runtime.createTab("s1")).rejects.toThrow("ForgeWebridge Chrome extension is offline");
+    await expect(runtime.createTab("s1")).rejects.toThrow("DeepSeek-Forge Webridge Chrome extension is offline");
     await expect(runtime.createTab("s1")).rejects.toThrow("refresh the extension from chrome://extensions");
   });
 
@@ -68,7 +68,7 @@ describe("WebridgeRuntime", () => {
     expect(runtime.listClients()).toEqual([
       expect.objectContaining({
         clientId: "stale-client",
-        name: "ForgeWebridge",
+        name: "DeepSeek-Forge Webridge",
       }),
     ]);
   });
@@ -106,11 +106,11 @@ describe("WebridgeRuntime", () => {
       now: () => new Date(currentMs).toISOString(),
     });
 
-    runtime.registerClient({ clientId: "client-1", name: "ForgeWebridge" });
+    runtime.registerClient({ clientId: "client-1", name: "DeepSeek-Forge Webridge" });
     currentMs += 1_500;
     expect(runtime.getHealth().state).toBe("stale");
 
-    runtime.heartbeatClient({ clientId: "client-1", name: "ForgeWebridge", extensionState: "polling" });
+    runtime.heartbeatClient({ clientId: "client-1", name: "DeepSeek-Forge Webridge", extensionState: "polling" });
 
     expect(runtime.getHealth().state).toBe("online");
     expect(runtime.listClients()[0]).toEqual(expect.objectContaining({
@@ -129,10 +129,10 @@ describe("WebridgeRuntime", () => {
       now: () => new Date(currentMs).toISOString(),
     });
 
-    runtime.registerClient({ clientId: "client-1", name: "ForgeWebridge" });
+    runtime.registerClient({ clientId: "client-1", name: "DeepSeek-Forge Webridge" });
     currentMs += 3_000;
 
-    await expect(runtime.createTab("s1")).rejects.toThrow("ForgeWebridge Chrome extension is offline");
+    await expect(runtime.createTab("s1")).rejects.toThrow("DeepSeek-Forge Webridge Chrome extension is offline");
   });
 
   it("releases long-poll waiters on shutdown", async () => {
@@ -161,6 +161,6 @@ describe("WebridgeRuntime", () => {
 
     runtime.shutdown();
 
-    await expect(runtime.createTab("s1")).rejects.toThrow("ForgeWebridge runtime is shutting down");
+    await expect(runtime.createTab("s1")).rejects.toThrow("DeepSeek-Forge Webridge runtime is shutting down");
   });
 });

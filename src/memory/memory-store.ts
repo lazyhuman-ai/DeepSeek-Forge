@@ -702,7 +702,7 @@ export class MemoryStore {
   #renderManifest(entries: MemoryEntry[]): string {
     const active = entries.filter((entry) => entry.status === "active" || entry.status === "stale");
     const lines = [
-      "# ForgeAgent Memory",
+      "# DeepSeek-Forge Memory",
       "",
       "This is a searchable registry. Use memory_search and memory_get for details.",
       "",

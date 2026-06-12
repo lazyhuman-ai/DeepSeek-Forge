@@ -1118,7 +1118,7 @@ export class SkillStore {
 
   #writeManifest(): void {
     const lines = [
-      "# ForgeAgent Skill Manifest",
+      "# DeepSeek-Forge Skill Manifest",
       "",
       `Generated: ${this.#now()}`,
       "",

@@ -130,7 +130,7 @@ function parseInstallInput(args: Record<string, unknown>): ExtensionInstallInput
 export const extensionSearchTool = buildTool({
   name: "extension_search",
   description: [
-    "Search ForgeAgent extensions: skills, MCP servers, and installable catalog entries.",
+    "Search DeepSeek-Forge extensions: skills, MCP servers, and installable catalog entries.",
     "Use this when the user asks to install or find an extension/tool/skill/MCP server.",
     "If the user provides a link, pass it as link.",
   ].join(" "),
@@ -161,7 +161,7 @@ export const extensionSearchTool = buildTool({
     if (query) searchInput.query = query;
     if (link) searchInput.link = link;
     const candidates = manager.search(searchInput);
-    if (candidates.length === 0) return "No matching ForgeAgent extensions were found.";
+    if (candidates.length === 0) return "No matching DeepSeek-Forge extensions were found.";
     return [
       `Found ${candidates.length} extension candidate(s).`,
       ...candidates.slice(0, 20).map((candidate, index) => [
@@ -186,7 +186,7 @@ export const extensionSearchTool = buildTool({
 
 export const extensionStatusTool = buildTool({
   name: "extension_status",
-  description: "Show installed ForgeAgent skills, MCP servers, tools, catalog, and extension health.",
+  description: "Show installed DeepSeek-Forge skills, MCP servers, tools, catalog, and extension health.",
   params: {},
   handler: async () => formatExtensionValue(getExtensionManagerForTools().getStatus()),
   isConcurrencySafe: true,
@@ -197,7 +197,7 @@ export const extensionStatusTool = buildTool({
 export const extensionInstallTool = buildTool({
   name: "extension_install",
   description: [
-    "Install a ForgeAgent extension from an extension_search install_input.",
+    "Install a DeepSeek-Forge extension from an extension_search install_input.",
     "For MCP servers, installation configures the server but does not need to enable it unless enable=true is explicitly provided.",
     "Return errors are readable and can be used to correct the install request.",
   ].join(" "),
@@ -246,7 +246,7 @@ export const extensionInstallTool = buildTool({
 
 export const extensionEnableTool = buildTool({
   name: "extension_enable",
-  description: "Enable an installed ForgeAgent skill, MCP server, or bundle after user intent is clear.",
+  description: "Enable an installed DeepSeek-Forge skill, MCP server, or bundle after user intent is clear.",
   params: {
     kind: {
       type: "string",

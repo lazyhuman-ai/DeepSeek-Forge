@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 import { loadDotEnv } from "../core/env.js";
-import { FORGE_AGENT_APP_NAME } from "../core/app-info.js";
+import { isDeepSeekForgeAppName } from "../core/app-info.js";
 import {
   clearRunState,
   isProcessAlive,
@@ -44,6 +44,10 @@ type HealthPayload = {
   gateway?: { baseUrl?: string };
   webridge?: { enabled?: boolean; state?: string; message?: string; clients?: unknown[] };
 };
+
+function isDeepSeekForgeHealth(health: HealthPayload | null): health is HealthPayload {
+  return isDeepSeekForgeAppName(health?.app);
+}
 
 async function main(): Promise<void> {
   loadDotEnv();
@@ -160,13 +164,13 @@ async function installCommand(options: CliOptions): Promise<void> {
   await doctorCommand(options);
   const url = `http://${options.host}:${options.port}`;
   console.log("");
-  console.log(`Open ForgeAgent Web Console: ${url}`);
+  console.log(`Open DeepSeek-Forge Web Console: ${url}`);
   openUrl(url);
   console.log("");
   console.log("Next step for Chrome:");
   console.log(`  Load or reload this unpacked extension: ${resolveWebridgeExtensionDir(options)}`);
-  console.log("  Open chrome://extensions, enable Developer mode, then click Reload on ForgeWebridge.");
-  console.log("After that, ForgeWebridge auto-pairs with the local gateway; manual pair codes are only a fallback.");
+  console.log("  Open chrome://extensions, enable Developer mode, then click Reload on DeepSeek-Forge Webridge.");
+  console.log("After that, DeepSeek-Forge Webridge auto-pairs with the local gateway; manual pair codes are only a fallback.");
 }
 
 async function installServiceCommand(options: CliOptions): Promise<void> {
@@ -182,11 +186,11 @@ async function installServiceCommand(options: CliOptions): Promise<void> {
   console.log(`LaunchAgent loaded: ${status.loaded ? "yes" : "no"}`);
   const url = `http://${options.host}:${options.port}`;
   const health = await waitForHealth(url, 15_000);
-  if (health?.app === FORGE_AGENT_APP_NAME) {
-    console.log(`ForgeAgent service is ready: ${url}`);
+  if (isDeepSeekForgeHealth(health)) {
+    console.log(`DeepSeek-Forge service is ready: ${url}`);
     printHealth(health);
   } else {
-    console.log(`ForgeAgent service was installed, but health is not ready yet: ${url}/health`);
+    console.log(`DeepSeek-Forge service was installed, but health is not ready yet: ${url}/health`);
     console.log(`LaunchAgent log: ${launchAgentLogPath()}`);
     console.log(`Gateway run log: ${runLogPath(options.dataDir)}`);
   }
@@ -207,11 +211,11 @@ async function startCommand(options: CliOptions): Promise<void> {
   const existing = readRunState(options.dataDir);
   if (existing && isProcessAlive(existing.pid)) {
     const health = await fetchHealth(existing.url).catch(() => null);
-    if (health?.app === FORGE_AGENT_APP_NAME) {
+    if (isDeepSeekForgeHealth(health)) {
       printRunning(existing, health);
       return;
     }
-    console.log(`ForgeAgent process ${existing.pid} is running, but /health is not responding.`);
+    console.log(`DeepSeek-Forge process ${existing.pid} is running, but /health is not responding.`);
     console.log(`Log: ${existing.logPath ?? runLogPath(options.dataDir)}`);
     return;
   }
@@ -224,7 +228,7 @@ async function startCommand(options: CliOptions): Promise<void> {
       port: options.port,
       logPath: runLogPath(options.dataDir),
     });
-    console.log(`ForgeAgent started: ${started.url}`);
+    console.log(`DeepSeek-Forge started: ${started.url}`);
     console.log(`Health: ${started.url}/health`);
     installForegroundShutdown(started);
     return;
@@ -248,7 +252,7 @@ async function startCommand(options: CliOptions): Promise<void> {
 
   const started = await waitForRunState(options.dataDir, 10_000);
   if (!started) {
-    console.log("ForgeAgent start requested, but health did not become ready before timeout.");
+    console.log("DeepSeek-Forge start requested, but health did not become ready before timeout.");
     console.log(`Log: ${logPath}`);
     return;
   }
@@ -267,32 +271,32 @@ async function statusCommand(options: CliOptions): Promise<void> {
   }
   if (state) {
     clearRunState(options.dataDir);
-    console.log("ForgeAgent is not running; stale run files were removed.");
+    console.log("DeepSeek-Forge is not running; stale run files were removed.");
     printLaunchdStatus(launchd);
     return;
   }
 
   const fallbackUrl = `http://${options.host}:${options.port}`;
   const health = await fetchHealth(fallbackUrl).catch(() => null);
-  if (health?.app === FORGE_AGENT_APP_NAME) {
-    console.log(`ForgeAgent is reachable at ${fallbackUrl}, but no local run file was found.`);
+  if (isDeepSeekForgeHealth(health)) {
+    console.log(`DeepSeek-Forge is reachable at ${fallbackUrl}, but no local run file was found.`);
     printHealth(health);
     printLaunchdStatus(launchd);
     return;
   }
-  console.log("ForgeAgent is not running.");
+  console.log("DeepSeek-Forge is not running.");
   printLaunchdStatus(launchd);
 }
 
 async function stopCommand(options: CliOptions, flags?: { quiet?: boolean }): Promise<void> {
   const state = readRunState(options.dataDir);
   if (!state) {
-    if (!flags?.quiet) console.log("ForgeAgent is not running.");
+    if (!flags?.quiet) console.log("DeepSeek-Forge is not running.");
     return;
   }
   if (!isProcessAlive(state.pid)) {
     clearRunState(options.dataDir);
-    if (!flags?.quiet) console.log("ForgeAgent is not running; stale run files were removed.");
+    if (!flags?.quiet) console.log("DeepSeek-Forge is not running; stale run files were removed.");
     return;
   }
 
@@ -303,7 +307,7 @@ async function stopCommand(options: CliOptions, flags?: { quiet?: boolean }): Pr
     await waitForExit(state.pid, 2_000);
   }
   clearRunState(options.dataDir);
-  if (!flags?.quiet) console.log(`Stopped ForgeAgent process ${state.pid}.`);
+  if (!flags?.quiet) console.log(`Stopped DeepSeek-Forge process ${state.pid}.`);
 }
 
 async function doctorCommand(options: CliOptions): Promise<void> {
@@ -354,7 +358,7 @@ async function doctorCommand(options: CliOptions): Promise<void> {
     });
     return null;
   });
-  if (health?.app === FORGE_AGENT_APP_NAME) {
+  if (isDeepSeekForgeHealth(health)) {
     checks.push({
       name: "HTTP health",
       state: "OK",
@@ -362,7 +366,7 @@ async function doctorCommand(options: CliOptions): Promise<void> {
     });
     const webridge = health.webridge;
     checks.push({
-      name: "ForgeWebridge runtime",
+      name: "DeepSeek-Forge Webridge runtime",
       state: webridge?.enabled === false
         ? "FAIL"
         : webridge?.state === "online"
@@ -418,7 +422,7 @@ async function doctorCommand(options: CliOptions): Promise<void> {
     detail: existsSync(serviceLogPath) ? serviceLogPath : `${serviceLogPath} does not exist yet.`,
   });
 
-  console.log("ForgeAgent doctor");
+  console.log("DeepSeek-Forge doctor");
   for (const check of checks) {
     console.log(`[${check.state}] ${check.name}: ${check.detail}`);
   }
@@ -442,7 +446,7 @@ function webridgePackageCommand(options: CliOptions): void {
     extensionDir: resolveWebridgeExtensionDir(options),
     ...(options.outputDir ? { outputDir: options.outputDir } : {}),
   });
-  console.log(`Packaged ForgeWebridge ${result.version}`);
+  console.log(`Packaged DeepSeek-Forge Webridge ${result.version}`);
   console.log(`Extension: ${result.extensionDir}`);
   console.log(`Zip: ${result.zipPath}`);
   console.log(`Manifest: ${result.manifestPath}`);
@@ -480,7 +484,7 @@ async function waitForRunState(dataDir: string, timeoutMs: number): Promise<Gate
     const state = readRunState(dataDir);
     if (state && isProcessAlive(state.pid)) {
       const health = await fetchHealth(state.url).catch(() => null);
-      if (health?.app === FORGE_AGENT_APP_NAME) return state;
+      if (isDeepSeekForgeHealth(health)) return state;
     }
     await sleep(200);
   }
@@ -491,7 +495,7 @@ async function waitForHealth(url: string, timeoutMs: number): Promise<HealthPayl
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const health = await fetchHealth(url).catch(() => null);
-    if (health?.app === FORGE_AGENT_APP_NAME) return health;
+    if (isDeepSeekForgeHealth(health)) return health;
     await sleep(300);
   }
   return null;
@@ -519,7 +523,7 @@ async function fetchHealth(url: string): Promise<HealthPayload> {
 }
 
 function printRunning(state: GatewayRunState, health: HealthPayload | null): void {
-  console.log(`ForgeAgent is running: ${state.url}`);
+  console.log(`DeepSeek-Forge is running: ${state.url}`);
   console.log(`Web Console: ${state.url}`);
   console.log(`PID: ${state.pid}`);
   console.log(`Data: ${resolve(state.dataDir)}`);
@@ -542,7 +546,7 @@ function printHealth(health: HealthPayload): void {
   if (webridge) {
     const state = webridge.state ?? "unknown";
     const message = webridge.message ?? "";
-    console.log(`ForgeWebridge: ${webridge.enabled === false ? "disabled" : state}${message ? ` - ${message}` : ""}`);
+    console.log(`DeepSeek-Forge Webridge: ${webridge.enabled === false ? "disabled" : state}${message ? ` - ${message}` : ""}`);
   }
 }
 
@@ -560,7 +564,7 @@ function printHelp(): void {
   npm run forgeagent -- webridge-package [--extension-dir <dir>] [--output-dir .forge/release]
   npm run forgeagent -- webridge-open [--extension-dir <dir>]
 
-ForgeAgent writes process state to ${runDir(".forge")}.
+DeepSeek-Forge writes process state to ${runDir(".forge")}.
 LaunchAgent label: ${FORGE_AGENT_LAUNCHD_LABEL}`);
 }
 

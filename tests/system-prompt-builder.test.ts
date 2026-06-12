@@ -17,7 +17,7 @@ describe("buildSystemPrompt", () => {
   it("returns base agent instructions when no catalog or memory", () => {
     const prompt = buildSystemPrompt({ sessionId: "s1" });
 
-    expect(prompt).toContain("ForgeAgent");
+    expect(prompt).toContain("DeepSeek-Forge");
     expect(prompt).toContain("access to tools");
     expect(prompt).toContain("Response rendering:");
     expect(prompt).toContain("sanitized inline/block HTML");
@@ -176,7 +176,7 @@ describe("buildSystemPrompt", () => {
 
     const skillsIdx = prompt.indexOf("<available_skills>");
     const memoryIdx = prompt.indexOf("Long-term memory:");
-    const agentIdx = prompt.indexOf("ForgeAgent");
+    const agentIdx = prompt.indexOf("DeepSeek-Forge");
 
     // Agent identity first, then skills, then memory
     expect(agentIdx).toBeLessThan(skillsIdx);

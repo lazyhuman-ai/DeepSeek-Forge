@@ -36,7 +36,7 @@ export function readWebridgeManifest(extensionDir: string): { name: string; vers
     version?: unknown;
   };
   return {
-    name: typeof manifest.name === "string" ? manifest.name : "ForgeWebridge",
+    name: typeof manifest.name === "string" ? manifest.name : "DeepSeek-Forge Webridge",
     version: typeof manifest.version === "string" ? manifest.version : "0.0.0",
   };
 }
@@ -47,7 +47,7 @@ export function ensureWebridgeIcons(extensionDir: string): string[] {
   const paths: string[] = [];
   for (const size of [16, 32, 48, 128]) {
     const iconPath = join(iconDir, `icon${size}.png`);
-    writeFileSync(iconPath, renderForgePng(size));
+    if (!existsSync(iconPath)) writeFileSync(iconPath, renderForgePng(size));
     paths.push(iconPath);
   }
   return paths;
@@ -56,7 +56,7 @@ export function ensureWebridgeIcons(extensionDir: string): string[] {
 export function ensureWebridgeManifestCompatibility(extensionDir: string): string {
   const manifestPath = join(extensionDir, "manifest.json");
   if (!existsSync(manifestPath)) {
-    throw new Error(`ForgeWebridge extension manifest not found: ${extensionDir}`);
+    throw new Error(`DeepSeek-Forge Webridge extension manifest not found: ${extensionDir}`);
   }
   const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
   const permissions = uniqueStringArray(manifest.permissions);
@@ -89,7 +89,7 @@ export function packageWebridgeExtension(options?: {
 }): WebridgePackageResult {
   const extensionDir = resolve(options?.extensionDir ?? defaultWebridgeExtensionDir());
   if (!existsSync(join(extensionDir, "manifest.json"))) {
-    throw new Error(`ForgeWebridge extension manifest not found: ${extensionDir}`);
+    throw new Error(`DeepSeek-Forge Webridge extension manifest not found: ${extensionDir}`);
   }
   ensureWebridgeManifestCompatibility(extensionDir);
   ensureWebridgeIcons(extensionDir);
@@ -97,7 +97,8 @@ export function packageWebridgeExtension(options?: {
   const manifest = readWebridgeManifest(extensionDir);
   const outputDir = resolve(options?.outputDir ?? join(process.cwd(), ".forge", "release"));
   mkdirSync(outputDir, { recursive: true });
-  const zipPath = join(outputDir, `${manifest.name}-${manifest.version}.zip`);
+  const artifactBase = artifactSlug(manifest.name);
+  const zipPath = join(outputDir, `${artifactBase}-${manifest.version}.zip`);
   rmSync(zipPath, { force: true });
   execFileSync("zip", [
     "-qr",
@@ -119,7 +120,7 @@ export function packageWebridgeExtension(options?: {
     sha256,
     generatedAt: new Date().toISOString(),
   };
-  const manifestPath = join(outputDir, `${manifest.name}-${manifest.version}.json`);
+  const manifestPath = join(outputDir, `${artifactBase}-${manifest.version}.json`);
   writeFileSync(manifestPath, JSON.stringify(releaseManifest, null, 2), "utf-8");
   return {
     extensionDir,
@@ -135,6 +136,14 @@ function uniqueStringArray(value: unknown): string[] {
     ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
     : [];
   return Array.from(new Set(items));
+}
+
+function artifactSlug(value: string): string {
+  return value
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "") || "DeepSeek-Forge-Webridge";
 }
 
 function renderForgePng(size: number): Buffer {

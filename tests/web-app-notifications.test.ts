@@ -21,7 +21,7 @@ describe("web native notifications", () => {
         toolName: "bash",
         action: "process.exec",
         subject: "npm test",
-        message: "ForgeAgent needs approval.",
+        message: "DeepSeek-Forge needs approval.",
         reason: "Process execution requires approval.",
         status: "pending",
         expiresAt: "t",

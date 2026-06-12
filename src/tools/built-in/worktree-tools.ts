@@ -156,9 +156,9 @@ async function commitEnv(projectRoot: string, signal?: AbortSignal): Promise<Nod
   if (userName && userEmail) return GIT_ENV;
   return {
     ...GIT_ENV,
-    GIT_AUTHOR_NAME: userName ?? "ForgeAgent",
+    GIT_AUTHOR_NAME: userName ?? "DeepSeek-Forge",
     GIT_AUTHOR_EMAIL: userEmail ?? "forgeagent@local",
-    GIT_COMMITTER_NAME: userName ?? "ForgeAgent",
+    GIT_COMMITTER_NAME: userName ?? "DeepSeek-Forge",
     GIT_COMMITTER_EMAIL: userEmail ?? "forgeagent@local",
   };
 }
@@ -193,7 +193,7 @@ async function checkWorktreeCanBeRemoved(path: string, signal?: AbortSignal): Pr
       return {
         ok: false,
         reason: `Path is not a git worktree: ${path}`,
-        recovery: "Use keep=true if this path should be preserved, or provide a valid ForgeAgent worktree path.",
+        recovery: "Use keep=true if this path should be preserved, or provide a valid DeepSeek-Forge worktree path.",
       };
     }
     const topLevel = resolve(await git(path, ["rev-parse", "--show-toplevel"], signal));
@@ -222,7 +222,7 @@ async function checkWorktreeCanBeRemoved(path: string, signal?: AbortSignal): Pr
     return {
       ok: false,
       reason: `Could not verify worktree state for ${path}: ${error instanceof Error ? error.message : String(error)}`,
-      recovery: "ForgeAgent refuses to remove an unverified worktree. Use keep=true to preserve it, or fix the git worktree state and retry.",
+      recovery: "DeepSeek-Forge refuses to remove an unverified worktree. Use keep=true to preserve it, or fix the git worktree state and retry.",
     };
   }
 }
@@ -312,7 +312,7 @@ async function exitHandler(
       const removalCheck = await checkWorktreeCanBeRemoved(path, context?.signal);
       if (!removalCheck.ok && !discardChanges) {
         const output = [
-          "Refusing to remove worktree because ForgeAgent cannot prove it is safe.",
+          "Refusing to remove worktree because DeepSeek-Forge cannot prove it is safe.",
           `Path: ${path}`,
           `Reason: ${removalCheck.reason}`,
           removalCheck.changedFiles?.length ? "Changed files:" : "",
@@ -401,7 +401,7 @@ async function mergeHandler(
         output: [
           "Cannot infer a unique target worktree to merge into.",
           `Worktree: ${path}`,
-          "Recovery: pass target_path with the main repository path. ForgeAgent refuses to guess when multiple worktrees exist.",
+          "Recovery: pass target_path with the main repository path. DeepSeek-Forge refuses to guess when multiple worktrees exist.",
         ].join("\n"),
         isError: true,
       };
@@ -562,7 +562,7 @@ export const exitWorktreeTool: ExecutableToolDefinition = buildTool({
 
 export const mergeWorktreeTool: ExecutableToolDefinition = buildTool({
   name: "merge_worktree",
-  description: "Merges a clean, committed ForgeAgent worktree branch back into a target worktree. It refuses dirty source or target worktrees and records durable worktree evidence.",
+  description: "Merges a clean, committed DeepSeek-Forge worktree branch back into a target worktree. It refuses dirty source or target worktrees and records durable worktree evidence.",
   params: {
     path: { type: "string", description: "Absolute source worktree path. Defaults to the active project/worktree root.", optional: true },
     target_path: { type: "string", description: "Absolute target repository path. Defaults to another worktree from git worktree list.", optional: true },
@@ -577,7 +577,7 @@ export const mergeWorktreeTool: ExecutableToolDefinition = buildTool({
 
 export const commitWorktreeTool: ExecutableToolDefinition = buildTool({
   name: "commit_worktree",
-  description: "Stages and commits all changes in the active ForgeAgent worktree, then records durable worktree evidence for later merge/review.",
+  description: "Stages and commits all changes in the active DeepSeek-Forge worktree, then records durable worktree evidence for later merge/review.",
   params: {
     path: { type: "string", description: "Absolute worktree path. Defaults to the active project/worktree root.", optional: true },
     message: { type: "string", description: "Commit message for the worktree changes." },

@@ -108,16 +108,16 @@ final class NativeNotificationController: NSObject, ObservableObject, UNUserNoti
         let type = event["type"] as? String ?? ""
         switch type {
         case "permission_request":
-            return ("ForgeAgent needs approval", truncate(event["message"] as? String ?? "A tool needs approval."))
+            return ("DeepSeek-Forge needs approval", truncate(event["message"] as? String ?? "A tool needs approval."))
         case "mcp_elicitation_request":
-            return ("ForgeAgent needs input", truncate(event["message"] as? String ?? "A connected MCP server needs input."))
+            return ("DeepSeek-Forge needs input", truncate(event["message"] as? String ?? "A connected MCP server needs input."))
         case "assistant_message":
-            return ("ForgeAgent replied", truncate(stripMarkup(event["text"] as? String ?? "Open ForgeAgent to read the reply.")))
+            return ("DeepSeek-Forge replied", truncate(stripMarkup(event["text"] as? String ?? "Open DeepSeek-Forge to read the reply.")))
         case "runtime_event":
             let detail = (event["detail"] as? String ?? "").lowercased()
             let message = (event["message"] as? String ?? "").lowercased()
             guard detail.contains("blocked") || message.hasPrefix("session blocked") else { return nil }
-            return ("Session blocked", truncate(event["message"] as? String ?? "Open ForgeAgent to review the blocked session."))
+            return ("Session blocked", truncate(event["message"] as? String ?? "Open DeepSeek-Forge to review the blocked session."))
         default:
             return nil
         }
@@ -144,7 +144,7 @@ final class NativeNotificationController: NSObject, ObservableObject, UNUserNoti
         pairRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         pairRequest.httpBody = try JSONSerialization.data(withJSONObject: [
             "code": code,
-            "name": "ForgeAgent macOS",
+            "name": "DeepSeek-Forge macOS",
             "kind": "desktop",
         ])
         let (pairData, pairResponse) = try await URLSession.shared.data(for: pairRequest)

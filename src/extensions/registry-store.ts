@@ -108,7 +108,7 @@ export class ExtensionRegistryStore {
       {
         id: "forge-builtin",
         kind: "builtin",
-        name: "ForgeAgent built-in registry snapshot",
+        name: "DeepSeek-Forge built-in registry snapshot",
         enabled: true,
         trust: "official",
         addedAt: new Date(0).toISOString(),

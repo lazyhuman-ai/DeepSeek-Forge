@@ -337,13 +337,13 @@ function systemPrompt(kind: SubagentType, toolMode: SubagentToolMode): string {
   const canWrite = toolMode === "workspace_write";
   const base = [
     canWrite
-      ? "You are a constrained ForgeAgent workspace implementation subagent."
-      : "You are a constrained read-only ForgeAgent workspace subagent.",
+      ? "You are a constrained DeepSeek-Forge workspace implementation subagent."
+      : "You are a constrained read-only DeepSeek-Forge workspace subagent.",
     canWrite
-      ? "You may edit only the current allowed workspace or worktree through the provided ForgeAgent tools."
+      ? "You may edit only the current allowed workspace or worktree through the provided DeepSeek-Forge tools."
       : "You must not edit files, write persistent state, launch external runtimes, install packages, change git state, or ask the user.",
     toolMode === "read_only"
-      ? "You may use only the provided read/search/LSP/git-diff/verification tools. Unsafe tool requests will be rejected by ForgeAgent policy."
+      ? "You may use only the provided read/search/LSP/git-diff/verification tools. Unsafe tool requests will be rejected by DeepSeek-Forge policy."
       : toolMode === "workspace_write"
       ? "You may use only the provided workspace tools for reading, bounded file edits, todos, git diff, safe verification, and worktree handoff. PermissionBroker and PathSandbox still apply to every tool call."
       : "You cannot use tools. You must reason only from the thread facts and workspace activity summary provided.",

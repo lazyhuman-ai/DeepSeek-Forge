@@ -48,7 +48,7 @@ function request(
   });
 }
 
-describe("ForgeWebridge HTTP routes", () => {
+describe("DeepSeek-Forge Webridge HTTP routes", () => {
   beforeAll(async () => {
     api = new CoreAPI(new ToolRegistry(), { dataDir: ".forge-test-webridge-http" });
     api.initWebridgeRuntime({ commandTimeoutMs: 1_000 });
@@ -67,7 +67,7 @@ describe("ForgeWebridge HTTP routes", () => {
 
   it("lets the extension register, poll a command, and submit the result", async () => {
     const registered = await request("POST", "/webridge/register", {
-      name: "ForgeWebridge Test",
+      name: "DeepSeek-Forge Webridge Test",
       version: "0.1.0",
     });
     expect(registered.status).toBe(201);
@@ -108,7 +108,7 @@ describe("ForgeWebridge HTTP routes", () => {
     const discovery = await request("GET", "/discovery");
     expect(discovery.status).toBe(200);
     expect(discovery.data).toMatchObject({
-      app: "ForgeAgent",
+      app: "DeepSeek-Forge",
       capabilities: {
         forgeWebridge: true,
         loopbackAutoPair: true,
@@ -122,7 +122,7 @@ describe("ForgeWebridge HTTP routes", () => {
   it("accepts extension heartbeat and returns runtime health", async () => {
     const heartbeat = await request("POST", "/webridge/heartbeat", {
       clientId: "heartbeat-client",
-      name: "ForgeWebridge Test",
+      name: "DeepSeek-Forge Webridge Test",
       version: "0.2.0",
       state: "polling",
     });

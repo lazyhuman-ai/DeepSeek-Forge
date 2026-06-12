@@ -70,7 +70,7 @@ macOS:
 ```sh
 npm run macos:build
 npm run macos:package
-open apps/macos/ForgeAgentMac/dist/ForgeAgent.app
+open apps/macos/ForgeAgentMac/dist/DeepSeek-Forge.app
 ```
 
 Android:

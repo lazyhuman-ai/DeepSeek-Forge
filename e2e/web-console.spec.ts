@@ -346,7 +346,7 @@ test.describe("ForgeAgent Web Console", () => {
 
     await textarea.press("Enter");
     await expect.poll(() => sentText).toContain("first line\nsecond line");
-    expect(sentText).toContain("Uploaded files available to ForgeAgent:");
+    expect(sentText).toContain("Uploaded files available to DeepSeek-Forge:");
     expect(sentText).toContain("upload-note.txt");
   });
 
@@ -603,7 +603,7 @@ test.describe("ForgeAgent Web Console", () => {
             routeAll: !optimized,
           },
           message: optimized
-            ? "Tailscale remote access is optimized for ForgeAgent."
+            ? "Tailscale remote access is optimized for DeepSeek-Forge."
             : "Tailscale is currently allowed to manage DNS or routes.",
         },
       });
@@ -613,9 +613,9 @@ test.describe("ForgeAgent Web Console", () => {
 
     await page.getByRole("button", { name: "Pair Mobile" }).click();
     await expect(page.locator(".remote-access-card")).toContainText("needs optimization");
-    await page.getByRole("button", { name: "Optimize Tailscale for ForgeAgent" }).click();
+    await page.getByRole("button", { name: "Optimize Tailscale for DeepSeek-Forge" }).click();
     await expect(page.locator(".remote-access-card")).toContainText("optimized");
-    await expect(page.getByRole("button", { name: "Optimize Tailscale for ForgeAgent" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Optimize Tailscale for DeepSeek-Forge" })).toHaveCount(0);
   });
 
   test("opens the extension manager and discovers built-in MCP catalog entries", async ({ page }) => {

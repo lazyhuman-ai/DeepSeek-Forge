@@ -955,6 +955,11 @@ export class CoreAPI {
     return grant;
   }
 
+  listPermissionGrants(sessionId?: string): ReturnType<PermissionBroker["listPermissionGrants"]> {
+    if (!this.#permissionBroker) throw new Error("Tool policy is not initialized.");
+    return this.#permissionBroker.listPermissionGrants(sessionId);
+  }
+
   initRuntimeManager(): RuntimeManager {
     this.#runtimeManager = new RuntimeManager(
       this.#threadStore,

@@ -30,7 +30,7 @@ public final class EndpointResolverTest {
     @Test
     public void nonJsonApiResponsesBecomeReadableConnectionErrors() {
         try {
-            EndpointResolver.parseJsonResponse("<!doctype html><title>ForgeAgent</title>");
+            EndpointResolver.parseJsonResponse("<!doctype html><title>DeepSeek-Forge</title>");
             fail("Expected non-JSON response to be rejected before JSONObject parsing.");
         } catch (Exception ex) {
             assertTrue(ex.getMessage().contains("non-JSON response"));

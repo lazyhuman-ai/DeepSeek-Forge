@@ -66,7 +66,7 @@ public final class QrScanActivity extends Activity {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
         TextView label = new TextView(this);
-        label.setText("Camera permission is needed to scan the ForgeAgent pairing QR.");
+        label.setText("Camera permission is needed to scan the DeepSeek-Forge pairing QR.");
         label.setTextColor(Color.WHITE);
         label.setTextSize(16);
         label.setGravity(Gravity.CENTER);
@@ -83,7 +83,7 @@ public final class QrScanActivity extends Activity {
         root.addView(barcodeView, match());
 
         TextView title = new TextView(this);
-        title.setText("Scan ForgeAgent pairing QR");
+        title.setText("Scan DeepSeek-Forge pairing QR");
         title.setTextColor(Color.WHITE);
         title.setTextSize(17);
         title.setGravity(Gravity.CENTER);

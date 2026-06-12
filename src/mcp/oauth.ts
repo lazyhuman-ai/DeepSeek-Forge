@@ -78,7 +78,7 @@ export class ForgeMcpOAuthProvider implements OAuthClientProvider {
 
   get clientMetadata(): OAuthClientMetadata {
     return {
-      client_name: "ForgeAgent MCP Client",
+      client_name: "DeepSeek-Forge MCP Client",
       client_uri: "http://localhost",
       redirect_uris: [this.#redirectUrl],
       grant_types: ["authorization_code", "refresh_token"],

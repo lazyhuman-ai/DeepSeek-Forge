@@ -58,7 +58,7 @@ final class CoreServiceController: ObservableObject {
                 status = .ready
                 reloadNonce = UUID()
             } else {
-                status = .degraded("ForgeAgent Core is still starting. The app will reconnect automatically; use Open Logs if it does not recover.")
+                status = .degraded("DeepSeek-Forge Core is still starting. The app will reconnect automatically; use Open Logs if it does not recover.")
                 startLateHealthRecovery()
             }
         } catch {
@@ -77,7 +77,7 @@ final class CoreServiceController: ObservableObject {
                 status = .ready
                 reloadNonce = UUID()
             } else {
-                status = .degraded("ForgeAgent Core is still restarting. The app will reconnect automatically; use Open Logs if it does not recover.")
+                status = .degraded("DeepSeek-Forge Core is still restarting. The app will reconnect automatically; use Open Logs if it does not recover.")
                 startLateHealthRecovery()
             }
         } catch {
@@ -183,7 +183,7 @@ final class CoreServiceController: ObservableObject {
         guard let data = try? Data(contentsOf: stateURL),
               let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let app = parsed["app"] as? String,
-              app == "ForgeAgent",
+              (app == "DeepSeek-Forge" || app == "ForgeAgent"),
               let port = parsed["port"] as? Int else {
             return nil
         }
@@ -203,8 +203,13 @@ final class CoreServiceController: ObservableObject {
     }
 
     private func terminateStaleBundledCoreProcesses() {
-        let marker = "ForgeAgent.app/Contents/Resources/ForgeAgentCore/src/gateways/http/main.ts"
-        let output = (try? run("/usr/bin/pgrep", ["-f", marker], allowFailure: true)) ?? ""
+        let markers = [
+            "DeepSeek-Forge.app/Contents/Resources/ForgeAgentCore/src/gateways/http/main.ts",
+            "ForgeAgent.app/Contents/Resources/ForgeAgentCore/src/gateways/http/main.ts",
+        ]
+        let output = markers
+            .compactMap { try? run("/usr/bin/pgrep", ["-f", $0], allowFailure: true) }
+            .joined(separator: "\n")
         let pids = output
             .split(whereSeparator: \.isNewline)
             .compactMap { Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
@@ -226,7 +231,7 @@ final class CoreServiceController: ObservableObject {
     private func writeLaunchScript() throws {
         guard let coreRoot = resolveCoreRoot() else {
             throw NSError(domain: "ForgeAgentMac", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Could not find bundled ForgeAgent Core resources."
+                NSLocalizedDescriptionKey: "Could not find bundled DeepSeek-Forge Core resources."
             ])
         }
         let node = resolveNodePath()

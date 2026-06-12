@@ -56,7 +56,7 @@ beforeEach(() => {
   mkdirSync(repoDir, { recursive: true });
   git(["init"]);
   git(["config", "user.email", "forgeagent@example.test"]);
-  git(["config", "user.name", "ForgeAgent Test"]);
+  git(["config", "user.name", "DeepSeek-Forge Test"]);
   writeFileSync(resolve(repoDir, "README.md"), "hello\n");
   git(["add", "README.md"]);
   git(["commit", "-m", "initial"]);

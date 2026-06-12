@@ -90,7 +90,7 @@ function print(value: unknown): void {
 }
 
 function usage(): void {
-  process.stdout.write(`ForgeAgent MCP CLI
+  process.stdout.write(`DeepSeek-Forge MCP CLI
 
 Usage:
   npm run mcp -- doctor

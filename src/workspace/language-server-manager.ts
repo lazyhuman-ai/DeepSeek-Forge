@@ -196,7 +196,7 @@ export class WorkspaceLanguageServerManager {
         language,
         state: "native",
         command: "typescript-language-service",
-        message: "ForgeAgent native TypeScript/JavaScript semantic service is available.",
+        message: "DeepSeek-Forge native TypeScript/JavaScript semantic service is available.",
       };
     }
     if (language === "unknown") {
@@ -219,7 +219,7 @@ export class WorkspaceLanguageServerManager {
       : {
         language,
         state: "unavailable",
-        message: `No ${language} language server executable was found on PATH. Install ${(COMMANDS[language] ?? []).join(" or ")} for semantic LSP support; ForgeAgent will fall back to lexical code search where possible.`,
+        message: `No ${language} language server executable was found on PATH. Install ${(COMMANDS[language] ?? []).join(" or ")} for semantic LSP support; DeepSeek-Forge will fall back to lexical code search where possible.`,
       };
     this.#statusCache.set(language, status);
     return status;

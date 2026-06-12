@@ -52,7 +52,7 @@ async function handler(
   if (typeof evidence === "string") return { output: evidence, isError: true };
   if (!context?.workspaceActivity) {
     return {
-      output: "complete_step requires WorkspaceActivityManager context. Recovery: retry inside a normal ForgeAgent session.",
+      output: "complete_step requires WorkspaceActivityManager context. Recovery: retry inside a normal DeepSeek-Forge session.",
       isError: true,
     };
   }

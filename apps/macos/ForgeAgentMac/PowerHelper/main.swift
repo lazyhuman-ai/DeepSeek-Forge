@@ -60,7 +60,7 @@ if rawArgs == ["--version"] {
 let config = parseArgs(rawArgs)
 let activity = ProcessInfo.processInfo.beginActivity(
     options: [.idleSystemSleepDisabled],
-    reason: "ForgeAgent remote access keeps Core online while the display may sleep."
+    reason: "DeepSeek-Forge remote access keeps Core online while the display may sleep."
 )
 
 signal(SIGTERM, forwardSignal)

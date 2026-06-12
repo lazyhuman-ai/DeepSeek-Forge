@@ -358,6 +358,8 @@ function serveStaticUi(
   const content = readFileSync(filePath);
   res.writeHead(200, {
     "Content-Type": contentType(filePath),
+    "Cache-Control": "no-store, max-age=0",
+    "Pragma": "no-cache",
     ...corsHeaders(origin),
   });
   if (req.method === "HEAD") {
@@ -395,6 +397,7 @@ const API_ROUTE_PREFIXES = new Set([
 
 function isApiLikeRequest(req: IncomingMessage): boolean {
   if (req.headers["x-forgeagent-api"] === "1") return true;
+  if (req.headers["x-deepseek-forge-api"] === "1") return true;
   const accept = String(req.headers.accept ?? "");
   if (accept.includes("application/json") && !accept.includes("text/html")) return true;
   const pathname = routeUrl(req).pathname;
@@ -450,10 +453,10 @@ function voiceTempDir(options: ResolvedHttpServerOptions): string {
 function missingUiHtml(): string {
   return `<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>ForgeAgent Web Console</title></head>
+<head><meta charset="utf-8"><title>DeepSeek-Forge Web Console</title></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 48px; line-height: 1.5;">
-  <h1>ForgeAgent Web Console is not built yet.</h1>
-  <p>Run <code>npm run ui:build</code>, then restart the ForgeAgent gateway.</p>
+  <h1>DeepSeek-Forge Web Console is not built yet.</h1>
+  <p>Run <code>npm run ui:build</code>, then restart the DeepSeek-Forge gateway.</p>
   <p>The JSON API is still available.</p>
 </body>
 </html>`;
@@ -523,7 +526,7 @@ function getCoreIdentity(options: ResolvedHttpServerOptions): CoreIdentity {
   }
   const identity: CoreIdentity = {
     coreId: `forge-core-${randomUUID()}`,
-    desktopName: hostname() || "ForgeAgent Desktop",
+    desktopName: hostname() || "DeepSeek-Forge Desktop",
     app: FORGE_AGENT_APP_NAME,
     version: FORGE_AGENT_VERSION,
     protocolVersion: 1,
@@ -731,6 +734,9 @@ function matchRoute(method: string, reqUrl: string): RouteMatch | null {
   }
   if (method === "GET" && segments.length === 1 && s(0) === "permission-requests") {
     return { handler: "listPermissionRequests", params: {} };
+  }
+  if (method === "GET" && segments.length === 1 && s(0) === "permission-grants") {
+    return { handler: "listPermissionGrants", params: {} };
   }
   if (method === "POST" && segments.length === 1 && s(0) === "permission-grants") {
     return { handler: "createPermissionGrant", params: {} };
@@ -1154,7 +1160,7 @@ async function defaultProviderConfigTest(
   const timer = setTimeout(() => controller.abort(), 30_000);
   try {
     const response = await provider.generate([
-      { role: "system", content: "You are testing a local ForgeAgent model provider configuration. Reply briefly." },
+      { role: "system", content: "You are testing a local DeepSeek-Forge model provider configuration. Reply briefly." },
       { role: "user", content: "Reply with OK." },
     ], undefined, { signal: controller.signal });
     const text = response.text.trim();
@@ -1437,7 +1443,7 @@ function buildDiagnosticsPayload(
     mcp: api.getMcpStatus(),
     webridge: runtime
       ? { enabled: true, ...runtime.getHealth() }
-      : { enabled: false, state: "offline", message: "ForgeWebridge runtime is not enabled." },
+      : { enabled: false, state: "offline", message: "DeepSeek-Forge Webridge runtime is not enabled." },
     memory: api.getMemoryStatus(),
     skills: {
       status: api.getSkillStatus(),
@@ -1520,7 +1526,7 @@ export function createHttpServer(
     const route = matchRoute(req.method ?? "GET", req.url ?? "/");
     if (!route) {
       if (isApiLikeRequest(req)) {
-        sendError(res, 404, "Unknown ForgeAgent API route.", origin);
+        sendError(res, 404, "Unknown DeepSeek-Forge API route.", origin);
         return;
       }
       if ((req.method === "GET" || req.method === "HEAD") && resolved.enableUi) {
@@ -1690,7 +1696,7 @@ async function handleRoute(
 
     case "optimizeTailscale": {
       try {
-        await optimizeTailscaleForForgeAgent();
+        await optimizeTailscaleForDeepSeekForge();
         sendJson(res, 200, await buildRemoteAccessPayload(req, options), origin);
       } catch (err) {
         sendError(
@@ -1705,7 +1711,7 @@ async function handleRoute(
 
     case "webridgeStatus": {
       const runtime = api.getWebridgeRuntime();
-      if (!runtime) { sendError(res, 404, "ForgeWebridge runtime is not enabled.", origin); return; }
+      if (!runtime) { sendError(res, 404, "DeepSeek-Forge Webridge runtime is not enabled.", origin); return; }
       const health = runtime.getHealth();
       sendJson(res, 200, { ...health, health, clients: health.clients }, origin);
       return;
@@ -1713,7 +1719,7 @@ async function handleRoute(
 
     case "webridgeRegister": {
       const runtime = api.getWebridgeRuntime();
-      if (!runtime) { sendError(res, 404, "ForgeWebridge runtime is not enabled.", origin); return; }
+      if (!runtime) { sendError(res, 404, "DeepSeek-Forge Webridge runtime is not enabled.", origin); return; }
       const body = await parseJson(req, options.maxBodyBytes);
       const info = runtime.registerClient({
         ...(typeof body.clientId === "string" ? { clientId: body.clientId } : {}),
@@ -1727,7 +1733,7 @@ async function handleRoute(
 
     case "webridgeHeartbeat": {
       const runtime = api.getWebridgeRuntime();
-      if (!runtime) { sendError(res, 404, "ForgeWebridge runtime is not enabled.", origin); return; }
+      if (!runtime) { sendError(res, 404, "DeepSeek-Forge Webridge runtime is not enabled.", origin); return; }
       const body = await parseJson(req, options.maxBodyBytes);
       const clientId = typeof body.clientId === "string" ? body.clientId : "";
       if (!clientId) { sendError(res, 400, "Missing clientId", origin); return; }
@@ -1748,7 +1754,7 @@ async function handleRoute(
 
     case "webridgePollCommand": {
       const runtime = api.getWebridgeRuntime();
-      if (!runtime) { sendError(res, 404, "ForgeWebridge runtime is not enabled.", origin); return; }
+      if (!runtime) { sendError(res, 404, "DeepSeek-Forge Webridge runtime is not enabled.", origin); return; }
       const url = routeUrl(req);
       const clientId = url.searchParams.get("clientId") ?? "";
       if (!clientId) { sendError(res, 400, "Missing clientId", origin); return; }
@@ -1764,7 +1770,7 @@ async function handleRoute(
 
     case "webridgeSubmitResult": {
       const runtime = api.getWebridgeRuntime();
-      if (!runtime) { sendError(res, 404, "ForgeWebridge runtime is not enabled.", origin); return; }
+      if (!runtime) { sendError(res, 404, "DeepSeek-Forge Webridge runtime is not enabled.", origin); return; }
       const body = await parseJson(req, options.maxBodyBytes);
       const clientId = typeof body.clientId === "string" ? body.clientId : "";
       const commandId = typeof body.commandId === "string" ? body.commandId : "";
@@ -1891,6 +1897,12 @@ async function handleRoute(
       const status = routeUrl(req).searchParams.get("status");
       const filter = status === "pending" ? { status: "pending" as const } : undefined;
       sendJson(res, 200, api.getPermissionRequests(filter), origin);
+      return;
+    }
+
+    case "listPermissionGrants": {
+      const sessionId = routeUrl(req).searchParams.get("sessionId") ?? undefined;
+      sendJson(res, 200, api.listPermissionGrants(sessionId), origin);
       return;
     }
 
@@ -2193,7 +2205,7 @@ async function handleRoute(
           "Content-Type": "text/html; charset=utf-8",
           ...corsHeaders(origin),
         });
-        res.end("<!doctype html><meta charset=\"utf-8\"><title>ForgeAgent MCP OAuth</title><body><h1>MCP authorization complete</h1><p>You can close this window.</p></body>");
+        res.end("<!doctype html><meta charset=\"utf-8\"><title>DeepSeek-Forge MCP OAuth</title><body><h1>MCP authorization complete</h1><p>You can close this window.</p></body>");
       } catch (err) {
         sendError(res, 400, err instanceof Error ? err.message : String(err), origin);
       }
@@ -2860,7 +2872,7 @@ function buildHealthPayload(
     : {
         enabled: false,
         state: "offline",
-        message: "ForgeWebridge runtime is not enabled.",
+        message: "DeepSeek-Forge Webridge runtime is not enabled.",
         clients: [],
   };
   return {
@@ -3011,10 +3023,10 @@ function tailscaleOptimizationMessage(input: {
     return "Tailscale is installed but not running. Open Tailscale on the Mac and sign in before pairing away from home.";
   }
   if (input.needsOptimization) {
-    return "Tailscale is currently allowed to manage DNS or routes. ForgeAgent can keep Tailscale remote access while disabling that DNS/route takeover, which avoids breaking DeepSeek/provider traffic on this Mac.";
+    return "Tailscale is currently allowed to manage DNS or routes. DeepSeek-Forge can keep Tailscale remote access while disabling that DNS/route takeover, which avoids breaking DeepSeek/provider traffic on this Mac.";
   }
   if (input.optimized) {
-    return "Tailscale remote access is optimized for ForgeAgent. It can carry phone-to-Mac traffic without taking over this Mac's DeepSeek DNS/proxy route.";
+    return "Tailscale remote access is optimized for DeepSeek-Forge. It can carry phone-to-Mac traffic without taking over this Mac's DeepSeek DNS/proxy route.";
   }
   if (input.health.length > 0) {
     return input.health.join(" ");
@@ -3022,7 +3034,7 @@ function tailscaleOptimizationMessage(input: {
   return "Tailscale is available.";
 }
 
-async function optimizeTailscaleForForgeAgent(): Promise<void> {
+async function optimizeTailscaleForDeepSeekForge(): Promise<void> {
   const before = await getTailscaleOptimizationStatus();
   if (!before.installed || !before.canOptimize) {
     throw new Error(before.message);

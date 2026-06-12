@@ -1,5 +1,5 @@
 {
-  "name": "forgeagent",
+  "name": "deepseek-forge",
   "version": "0.1.0",
   "license": "MIT",
   "description": "DeepSeek-native local AI agent workspace for Mac, Chrome, Android, MCP, browser automation, and private multi-device workflows.",
@@ -23,6 +23,7 @@
     "ui:typecheck": "tsc -p web/tsconfig.json --noEmit",
     "ui:build": "vite build --config web/vite.config.ts",
     "ui:e2e": "playwright test",
+    "ui:composer-smoke": "node scripts/verify-composer-ui.mjs",
     "product:build": "npm run ui:typecheck && npm run ui:build",
     "macos:build": "swift build --package-path apps/macos/ForgeAgentMac",
     "macos:package": "bash apps/macos/ForgeAgentMac/scripts/package_app.sh",
@@ -34,6 +35,7 @@
     "android:install": "node scripts/android-build.mjs installDebug",
     "native:build": "npm run macos:smoke && npm run android:build && npm run android:test",
     "check": "npm run typecheck && npm run product:build && npm test && npm run ui:e2e",
+    "deepseek-forge": "tsx src/cli/forgeagent.ts",
     "forgeagent": "tsx src/cli/forgeagent.ts",
     "install:local": "npm run product:build && tsx src/cli/forgeagent.ts install",
     "install-service": "tsx src/cli/forgeagent.ts install-service",

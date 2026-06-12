@@ -374,6 +374,24 @@ export type PermissionRequest = {
   expiresAt: string;
 };
 
+export type PermissionGrantKind =
+  | "workspace_edits"
+  | "safe_commands"
+  | "package_install"
+  | "external_runtime"
+  | "network_write"
+  | "destructive_action";
+
+export type PermissionGrant = {
+  grantId: string;
+  sessionId: string;
+  grantKind: PermissionGrantKind;
+  scope: "session" | "project" | "branch";
+  branchId?: string;
+  createdAt: string;
+  expiresAt?: string;
+};
+
 export type ActivityKind =
   | "plan"
   | "change"

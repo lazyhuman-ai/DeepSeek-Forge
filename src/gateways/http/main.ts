@@ -13,7 +13,7 @@ async function main() {
     logPath: runLogPath(dataDir),
   });
 
-  logger.info(`ForgeAgent HTTP gateway: ${started.url}`);
+  logger.info(`DeepSeek-Forge HTTP gateway: ${started.url}`);
   logger.info(`SSE events: ${started.url}/events`);
 
   let shuttingDown = false;

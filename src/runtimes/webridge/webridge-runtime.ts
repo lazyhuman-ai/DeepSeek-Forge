@@ -124,7 +124,7 @@ export class WebridgeRuntime implements BrowserToolRuntime {
     version?: string;
     userAgent?: string;
   }): WebridgeClientInfo {
-    if (this.#closed) throw new Error("ForgeWebridge runtime is shutting down.");
+    if (this.#closed) throw new Error("DeepSeek-Forge Webridge runtime is shutting down.");
     const clientId = input?.clientId && input.clientId.trim()
       ? input.clientId.trim()
       : crypto.randomUUID();
@@ -132,7 +132,7 @@ export class WebridgeRuntime implements BrowserToolRuntime {
     const now = this.#now();
     const info: WebridgeClientInfo = {
       clientId,
-      name: input?.name?.trim() || existing?.name || "ForgeWebridge",
+      name: input?.name?.trim() || existing?.name || "DeepSeek-Forge Webridge",
       connectedAt: existing?.connectedAt ?? now,
       lastSeenAt: now,
       ...(existing?.lastHeartbeatAt ? { lastHeartbeatAt: existing.lastHeartbeatAt } : {}),
@@ -198,7 +198,7 @@ export class WebridgeRuntime implements BrowserToolRuntime {
 
     for (const pending of this.#pending.values()) {
       clearTimeout(pending.timer);
-      pending.reject(new Error("ForgeWebridge runtime is shutting down."));
+      pending.reject(new Error("DeepSeek-Forge Webridge runtime is shutting down."));
     }
     this.#pending.clear();
     this.#queues.clear();
@@ -210,7 +210,7 @@ export class WebridgeRuntime implements BrowserToolRuntime {
   ): Promise<WebridgeCommand | null> {
     if (this.#closed) return null;
     if (!this.#clients.has(clientId)) {
-      this.registerClient({ clientId, name: "ForgeWebridge" });
+      this.registerClient({ clientId, name: "DeepSeek-Forge Webridge" });
     }
     this.#touch(clientId);
     const queue = this.#queues.get(clientId) ?? [];
@@ -242,7 +242,7 @@ export class WebridgeRuntime implements BrowserToolRuntime {
     if (result.ok) {
       pending.resolve(result.output);
     } else {
-      pending.reject(new Error(result.error || "ForgeWebridge command failed without an error message."));
+      pending.reject(new Error(result.error || "DeepSeek-Forge Webridge command failed without an error message."));
     }
   }
 
@@ -348,7 +348,7 @@ export class WebridgeRuntime implements BrowserToolRuntime {
   #requireTab(sessionId: string): string {
     const tabId = this.#sessionTabs.get(sessionId);
     if (!tabId) {
-      throw new Error(`No ForgeWebridge tab is attached for session ${sessionId}. Call browser_create_tab first.`);
+      throw new Error(`No DeepSeek-Forge Webridge tab is attached for session ${sessionId}. Call browser_create_tab first.`);
     }
     return tabId;
   }
@@ -360,7 +360,7 @@ export class WebridgeRuntime implements BrowserToolRuntime {
     tabId?: string,
   ): Promise<unknown> {
     if (this.#closed) {
-      throw new Error("ForgeWebridge runtime is shutting down.");
+      throw new Error("DeepSeek-Forge Webridge runtime is shutting down.");
     }
     const clientId = this.#selectClient();
     const command: WebridgeCommand = {
@@ -383,7 +383,7 @@ export class WebridgeRuntime implements BrowserToolRuntime {
         timer: setTimeout(() => {
           this.#pending.delete(command.id);
           reject(new Error(
-            `ForgeWebridge command timed out before the Chrome extension returned a result. Command: ${kind}. Recovery: confirm the ForgeWebridge extension is connected, the target tab is not blocked by login/CAPTCHA/risk-control UI, then retry.`,
+            `DeepSeek-Forge Webridge command timed out before the Chrome extension returned a result. Command: ${kind}. Recovery: confirm the DeepSeek-Forge Webridge extension is connected, the target tab is not blocked by login/CAPTCHA/risk-control UI, then retry.`,
           ));
         }, this.#commandTimeoutMs),
       };
@@ -402,11 +402,11 @@ export class WebridgeRuntime implements BrowserToolRuntime {
         .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt))[0];
       throw new Error(
         [
-          "ForgeWebridge Chrome extension is offline before browser command execution.",
+          "DeepSeek-Forge Webridge Chrome extension is offline before browser command execution.",
           lastSeen
             ? `Last seen client: ${lastSeen.clientId} (${lastSeen.name}) at ${lastSeen.lastSeenAt}; ageMs=${lastSeen.ageMs}; health=${lastSeen.health}.`
-            : "No ForgeWebridge Chrome extension client has registered in this gateway process.",
-          "Recovery: keep Chrome open with the ForgeWebridge extension enabled. The extension should auto-pair and reconnect through the local ForgeAgent gateway; if it remains offline, refresh the extension from chrome://extensions and retry.",
+            : "No DeepSeek-Forge Webridge Chrome extension client has registered in this gateway process.",
+          "Recovery: keep Chrome open with the DeepSeek-Forge Webridge extension enabled. The extension should auto-pair and reconnect through the local DeepSeek-Forge gateway; if it remains offline, refresh the extension from chrome://extensions and retry.",
           "Setup: run npm run http and load /Users/leileqi/plugins/forgewebridge/chrome-extension in Chrome. Manual pair codes are only a fallback.",
         ].join(" "),
       );
@@ -418,7 +418,7 @@ export class WebridgeRuntime implements BrowserToolRuntime {
   #touch(clientId: string): void {
     const info = this.#clients.get(clientId);
     if (!info) {
-      throw new Error(`Unknown ForgeWebridge client: ${clientId}`);
+      throw new Error(`Unknown DeepSeek-Forge Webridge client: ${clientId}`);
     }
     info.lastSeenAt = this.#now();
     this.#emitHealthIfChanged();
@@ -463,17 +463,17 @@ export class WebridgeRuntime implements BrowserToolRuntime {
   #healthMessage(state: WebridgeHealthState, clients: PublicWebridgeClientInfo[]): string {
     if (state === "online") {
       const online = clients.filter((client) => client.health === "online").length;
-      return `ForgeWebridge is online with ${online} Chrome extension client(s).`;
+      return `DeepSeek-Forge Webridge is online with ${online} Chrome extension client(s).`;
     }
     if (state === "stale") {
       const latest = clients.sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt))[0];
       return latest
-        ? `ForgeWebridge is stale; latest client ${latest.clientId} was last seen at ${latest.lastSeenAt}.`
-        : "ForgeWebridge is stale; no online Chrome extension client is currently long-polling.";
+        ? `DeepSeek-Forge Webridge is stale; latest client ${latest.clientId} was last seen at ${latest.lastSeenAt}.`
+        : "DeepSeek-Forge Webridge is stale; no online Chrome extension client is currently long-polling.";
     }
     return clients.length > 0
-      ? "ForgeWebridge is offline; all known Chrome extension clients exceeded the offline timeout."
-      : "ForgeWebridge is offline; no Chrome extension client has registered yet.";
+      ? "DeepSeek-Forge Webridge is offline; all known Chrome extension clients exceeded the offline timeout."
+      : "DeepSeek-Forge Webridge is offline; no Chrome extension client has registered yet.";
   }
 
   #emitHealthIfChanged(): void {
@@ -490,5 +490,5 @@ function requireStringOutput(output: unknown, field: string): string {
     const value = (output as Record<string, unknown>)[field];
     if (typeof value === "string" && value.length > 0) return value;
   }
-  throw new Error(`ForgeWebridge command returned invalid output; missing string field ${field}.`);
+  throw new Error(`DeepSeek-Forge Webridge command returned invalid output; missing string field ${field}.`);
 }

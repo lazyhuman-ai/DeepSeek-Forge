@@ -10,6 +10,7 @@ import type {
   McpServerStatus,
   McpToolMetadata,
   NetworkUrls,
+  PermissionGrant,
   PermissionRequest,
   Project,
   RemoteAccessStatus,
@@ -24,7 +25,7 @@ import type {
 } from "./types";
 
 const TOKEN_KEY = "forgeagent.web.token";
-const DEVICE_NAME = "ForgeAgent Web Console";
+const DEVICE_NAME = "DeepSeek-Forge Web Console";
 
 export class ApiError extends Error {
   status: number;
@@ -79,7 +80,7 @@ export async function apiFetch<T>(
   const token = await ensureDeviceToken();
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
-  headers.set("X-ForgeAgent-API", "1");
+  headers.set("X-DeepSeek-Forge-API", "1");
   headers.set("Authorization", `Bearer ${token}`);
   if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
@@ -102,7 +103,7 @@ export async function parseResponse<T>(response: Response): Promise<T> {
       const snippet = text.replace(/\s+/g, " ").trim().slice(0, 160);
       throw new ApiError(
         response.status,
-        `ForgeAgent API returned non-JSON content${snippet ? `: ${snippet}` : "."}`,
+        `DeepSeek-Forge API returned non-JSON content${snippet ? `: ${snippet}` : "."}`,
       );
     }
   }
@@ -155,6 +156,8 @@ export const api = {
   usage: (sessionId: string) => apiFetch<SessionUsageSummary>(`/sessions/${sessionId}/usage`),
   activity: (sessionId: string, branchId?: string) =>
     apiFetch<WorkspaceActivityState>(`/sessions/${sessionId}/activity${branchId ? `?branchId=${encodeURIComponent(branchId)}` : ""}`),
+  permissionGrants: (sessionId?: string) =>
+    apiFetch<PermissionGrant[]>(sessionId ? `/permission-grants?sessionId=${encodeURIComponent(sessionId)}` : "/permission-grants"),
   createPermissionGrant: (input: { sessionId: string; grantKind: string; scope?: "session" | "project" | "branch"; branchId?: string; expiresAt?: string }) =>
     apiFetch<Record<string, unknown>>("/permission-grants", {
       method: "POST",

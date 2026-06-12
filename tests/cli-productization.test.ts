@@ -21,7 +21,7 @@ afterEach(() => {
   }
 });
 
-describe("ForgeAgent productization helpers", () => {
+describe("DeepSeek-Forge productization helpers", () => {
   it("renders a launchd plist with gateway environment", () => {
     const plist = renderLaunchAgentPlist({
       projectRoot: "/tmp/Forge & Agent",
@@ -42,7 +42,7 @@ describe("ForgeAgent productization helpers", () => {
 
   const packageIt = hasZip() ? it : it.skip;
 
-  packageIt("packages ForgeWebridge with generated icons and release manifest", () => {
+  packageIt("packages DeepSeek-Forge Webridge with generated icons and release manifest", () => {
     const root = mkdtempSync(join(tmpdir(), "forgewebridge-package-"));
     tmpRoots.push(root);
     const extensionDir = join(root, "extension");
@@ -50,7 +50,7 @@ describe("ForgeAgent productization helpers", () => {
     mkdirSync(extensionDir, { recursive: true });
     writeFileSync(join(extensionDir, "manifest.json"), JSON.stringify({
       manifest_version: 3,
-      name: "ForgeWebridge",
+      name: "DeepSeek-Forge Webridge",
       version: "9.9.9",
       background: { service_worker: "background.js" },
     }));

@@ -137,7 +137,7 @@ function initWebridgeRuntimeFromEnv(api: CoreAPI): void {
       ? { healthCheckIntervalMs: Math.max(0, parseInt(process.env.FORGE_WEBRIDGE_HEALTH_CHECK_INTERVAL_MS, 10)) }
       : {}),
   });
-  logger.info(`ForgeWebridge runtime registered: ${runtimeName}`);
+  logger.info(`DeepSeek-Forge Webridge runtime registered: ${runtimeName}`);
 }
 
 async function initBrowserRuntimeFromEnv(api: CoreAPI): Promise<void> {

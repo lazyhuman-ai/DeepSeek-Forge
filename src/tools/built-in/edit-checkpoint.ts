@@ -74,7 +74,7 @@ async function handler(
   const latest = latestCheckpoint(events, filePath);
   if (!latest?.checkpoint) {
     return {
-      output: `No reversible edit checkpoint found for ${filePath} in this session branch.\nRecovery: inspect git_diff or the file history outside ForgeAgent, then apply an explicit edit if needed.`,
+      output: `No reversible edit checkpoint found for ${filePath} in this session branch.\nRecovery: inspect git_diff or the file history outside DeepSeek-Forge, then apply an explicit edit if needed.`,
       isError: true,
     };
   }
@@ -152,12 +152,12 @@ async function handler(
     afterContent: previousContent,
     operation: "updated",
   }, context);
-  return `Reverted latest ForgeAgent edit checkpoint for: ${filePath}`;
+  return `Reverted latest DeepSeek-Forge edit checkpoint for: ${filePath}`;
 }
 
 export const revertFileChangeTool: ExecutableToolDefinition = buildTool({
   name: "revert_file_change",
-  description: "Reverts the latest reversible ForgeAgent edit checkpoint for a workspace file in the current session/branch. Refuses to clobber newer changes unless force=true.",
+  description: "Reverts the latest reversible DeepSeek-Forge edit checkpoint for a workspace file in the current session/branch. Refuses to clobber newer changes unless force=true.",
   params: {
     file_path: {
       type: "string",

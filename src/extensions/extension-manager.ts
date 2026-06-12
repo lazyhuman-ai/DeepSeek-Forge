@@ -127,7 +127,7 @@ function skillRiskSummary(skill: SkillManifest): string {
   if (state === "warning") {
     return "Static scan found warnings. You can trust and enable this skill; runtime tool permissions and sandbox still apply.";
   }
-  return "Skill content is exposed as readable instructions; scripts still run through normal ForgeAgent tools and permissions.";
+  return "Skill content is exposed as readable instructions; scripts still run through normal DeepSeek-Forge tools and permissions.";
 }
 
 function skillInstallMessage(prefix: string, skill: SkillManifest): string {
@@ -382,13 +382,13 @@ function bundleCandidate(params: {
     title: "Code Review Workspace Bundle",
     description: "Installs a real GitHub code-review skill and the official Filesystem MCP server for project-file review workflows.",
     source: "forge-builtin-bundle:code-review-workspace",
-    sourceLabel: "ForgeAgent bundle",
+    sourceLabel: "DeepSeek-Forge bundle",
     trust: "trusted",
     installed,
     enabled,
     status,
     capabilities: ["skill", "mcp_server", "fs.read", "fs.write"],
-    riskSummary: "Bundle installation expands into normal skill and MCP installs; MCP launch and file access still go through ForgeAgent policy and sandbox.",
+    riskSummary: "Bundle installation expands into normal skill and MCP installs; MCP launch and file access still go through DeepSeek-Forge policy and sandbox.",
     installInput: {
       kind: "bundle",
       name: "code-review-workspace",
@@ -433,13 +433,13 @@ function designBundleCandidate(params: {
     title: "Design Reference Bundle",
     description: "Installs a real GitHub frontend-design skill and the official Everything MCP reference server for extension verification workflows.",
     source: "forge-builtin-bundle:design-reference",
-    sourceLabel: "ForgeAgent bundle",
+    sourceLabel: "DeepSeek-Forge bundle",
     trust: "trusted",
     installed,
     enabled,
     status,
     capabilities: ["skill", "mcp_server", "mcp.tool", "design"],
-    riskSummary: "Bundle installation expands into normal skill and MCP installs; the MCP server still launches through ForgeAgent permissions.",
+    riskSummary: "Bundle installation expands into normal skill and MCP installs; the MCP server still launches through DeepSeek-Forge permissions.",
     installInput: {
       kind: "bundle",
       name: "design-reference",
@@ -502,7 +502,7 @@ function candidateFromLink(link: string): ExtensionCandidate | null {
       kind: "skill",
       name: skillLink.name,
       title: skillLink.name,
-      description: `Skill candidate resolved from ${skillLink.sourceLabel}. ForgeAgent will download the complete SKILL.md package directory, scan it, and enable it only if the package is clean or explicitly force-enabled.`,
+      description: `Skill candidate resolved from ${skillLink.sourceLabel}. DeepSeek-Forge will download the complete SKILL.md package directory, scan it, and enable it only if the package is clean or explicitly force-enabled.`,
       source: url.href,
       sourceLabel: skillLink.sourceLabel,
       trust: "community",
@@ -510,7 +510,7 @@ function candidateFromLink(link: string): ExtensionCandidate | null {
       enabled: false,
       status: "available",
       capabilities: ["skill"],
-      riskSummary: "External skills are readable instruction packages. They are scanned before activation; scripts still require explicit tool calls and normal ForgeAgent permissions.",
+      riskSummary: "External skills are readable instruction packages. They are scanned before activation; scripts still require explicit tool calls and normal DeepSeek-Forge permissions.",
       installInput: {
         kind: "skill_github",
         url: url.href,
@@ -543,7 +543,7 @@ function candidateFromLink(link: string): ExtensionCandidate | null {
       enabled: false,
       status: "available",
       capabilities: ["stdio", "process launch"],
-      riskSummary: "A GitHub link cannot prove its runtime command automatically. ForgeAgent stages an npx-based MCP candidate and keeps it disabled until enabled.",
+      riskSummary: "A GitHub link cannot prove its runtime command automatically. DeepSeek-Forge stages an npx-based MCP candidate and keeps it disabled until enabled.",
       installInput: {
         kind: "mcp_server",
         server: {

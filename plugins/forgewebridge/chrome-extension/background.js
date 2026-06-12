@@ -1,4 +1,4 @@
-const EXTENSION_NAME = "ForgeWebridge";
+const EXTENSION_NAME = "DeepSeek-Forge Webridge";
 const EXTENSION_VERSION = "0.5.3";
 const DEFAULT_BASE_URL = "http://127.0.0.1:3000";
 const DISCOVERY_URLS = [
@@ -88,18 +88,18 @@ async function startPolling() {
     while (true) {
       const cfg = await getConfig();
       if (!cfg.enabled) {
-        await setStatus("idle", "ForgeWebridge is disabled.");
+        await setStatus("idle", "DeepSeek-Forge Webridge is disabled.");
         return;
       }
 
       if (!cfg.token) {
-        await setStatus("pairing", "Looking for ForgeAgent on this Mac.");
+        await setStatus("pairing", "Looking for DeepSeek-Forge on this Mac.");
         try {
           const discovered = await ensureDiscoveredBaseUrl(cfg, { force: true });
           await autoPair(discovered);
-          await setStatus("paired", "Connected to ForgeAgent. Browser tools are ready.");
+          await setStatus("paired", "Connected to DeepSeek-Forge. Browser tools are ready.");
         } catch (err) {
-          await setStatus("idle", `Waiting for ForgeAgent. ${errorMessage(err)}`);
+          await setStatus("idle", `Waiting for DeepSeek-Forge. ${errorMessage(err)}`);
           await sleep(ERROR_DELAY_MS);
         }
         continue;
@@ -122,7 +122,7 @@ async function startPolling() {
         const discovered = await ensureDiscoveredBaseUrl(authedCfg);
         const clientId = await ensureRegistered(discovered);
         await heartbeat({ ...discovered, clientId }, "polling");
-        await setStatus("connected", `Connected to ForgeAgent as ${clientId}.`);
+        await setStatus("connected", `Connected to DeepSeek-Forge as ${clientId}.`);
         const command = await pollCommand({ ...discovered, clientId });
         if (command) {
           await executeAndSubmit({ ...discovered, clientId }, command);
@@ -133,7 +133,7 @@ async function startPolling() {
       } catch (err) {
         if (isAuthError(err)) {
           await chrome.storage.local.remove(["token", "clientId"]);
-          await setStatus("pairing", "Stored ForgeAgent device token is no longer valid; auto-pairing will retry.");
+          await setStatus("pairing", "Stored DeepSeek-Forge device token is no longer valid; auto-pairing will retry.");
           await sleep(IDLE_DELAY_MS);
           continue;
         }
@@ -208,19 +208,19 @@ async function ensureDiscoveredBaseUrl(cfg, options = {}) {
   if (!options.force && lastDiscoveredBaseUrl && Date.now() - lastDiscoveryAt < DISCOVERY_REFRESH_MS) {
     return { ...cfg, baseUrl: lastDiscoveredBaseUrl };
   }
-  const discovered = await discoverForgeAgent(cfg.baseUrl);
+  const discovered = await discoverDeepSeekForge(cfg.baseUrl);
   lastDiscoveryAt = Date.now();
   lastDiscoveredBaseUrl = discovered.baseUrl;
   if (discovered.baseUrl !== cfg.baseUrl) {
     await chrome.storage.local.set({ baseUrl: discovered.baseUrl });
   }
   if (!discovered.forgeWebridge) {
-    throw new Error("ForgeAgent is running, but ForgeWebridge runtime is not enabled.");
+    throw new Error("DeepSeek-Forge is running, but DeepSeek-Forge Webridge runtime is not enabled.");
   }
   return { ...cfg, baseUrl: discovered.baseUrl };
 }
 
-async function discoverForgeAgent(preferredBaseUrl) {
+async function discoverDeepSeekForge(preferredBaseUrl) {
   const candidates = unique([
     preferredBaseUrl,
     DEFAULT_BASE_URL,
@@ -231,18 +231,18 @@ async function discoverForgeAgent(preferredBaseUrl) {
   for (const baseUrl of candidates) {
     try {
       const data = await fetchJson(`${baseUrl}/discovery`, { timeoutMs: DISCOVERY_TIMEOUT_MS });
-      if (data?.app === "ForgeAgent") {
+      if (data?.app === "DeepSeek-Forge" || data?.app === "ForgeAgent") {
         return {
           baseUrl,
           forgeWebridge: data?.capabilities?.forgeWebridge === true || data?.webridge?.enabled === true,
         };
       }
-      errors.push(`${baseUrl}: not ForgeAgent`);
+      errors.push(`${baseUrl}: not DeepSeek-Forge`);
     } catch (err) {
       errors.push(`${baseUrl}: ${errorMessage(err)}`);
     }
   }
-  throw new Error(`Could not find local ForgeAgent gateway. Tried ${candidates.join(", ")}.`);
+  throw new Error(`Could not find local DeepSeek-Forge gateway. Tried ${candidates.join(", ")}.`);
 }
 
 async function autoPair(cfg) {
@@ -310,7 +310,7 @@ async function ensureRegistered(cfg) {
     }),
   });
   const data = await response.json();
-  if (!data.clientId) throw new Error("ForgeAgent did not return a Webridge clientId.");
+  if (!data.clientId) throw new Error("DeepSeek-Forge did not return a Webridge clientId.");
   await chrome.storage.local.set({ clientId: data.clientId });
   return data.clientId;
 }
@@ -382,7 +382,7 @@ async function gatewayFetch(cfg, path, init) {
     } catch {
       // Keep status text
     }
-    throw new Error(`ForgeAgent gateway request failed: ${message}`);
+    throw new Error(`DeepSeek-Forge gateway request failed: ${message}`);
   }
   return response;
 }
@@ -459,14 +459,14 @@ async function executeCommand(command) {
       return dataUrl.replace(/^data:image\/png;base64,/, "");
     }
     default:
-      throw new Error(`Unsupported ForgeWebridge command: ${command.kind}`);
+      throw new Error(`Unsupported DeepSeek-Forge Webridge command: ${command.kind}`);
   }
 }
 
 function captureVisibleTabPng(windowId, timeoutMs) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error("Chrome did not complete captureVisibleTab before the ForgeWebridge screenshot timeout."));
+      reject(new Error("Chrome did not complete captureVisibleTab before the DeepSeek-Forge Webridge screenshot timeout."));
     }, timeoutMs);
     chrome.tabs.captureVisibleTab(windowId, { format: "png" }, (dataUrl) => {
       clearTimeout(timer);
@@ -494,7 +494,7 @@ function fallbackScreenshotScript(reason) {
     .trim()
     .slice(0, 1400);
   const lines = [
-    `ForgeWebridge DOM screenshot fallback`,
+    `DeepSeek-Forge Webridge DOM screenshot fallback`,
     `Reason: ${reason}`,
     `Title: ${document.title || ""}`,
     `URL: ${location.href}`,
@@ -608,7 +608,7 @@ function extractLinksScript(selector) {
 function requireTabId(command) {
   const parsed = Number(command.tabId);
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error("ForgeWebridge command is missing a valid tabId. Recovery: call browser_create_tab first.");
+    throw new Error("DeepSeek-Forge Webridge command is missing a valid tabId. Recovery: call browser_create_tab first.");
   }
   return parsed;
 }
@@ -627,7 +627,7 @@ function numberOr(value, fallback) {
 function assertHttpUrl(url) {
   const parsed = new URL(url);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`Only http(s) navigation is allowed by ForgeWebridge. Received: ${url}`);
+    throw new Error(`Only http(s) navigation is allowed by DeepSeek-Forge Webridge. Received: ${url}`);
   }
 }
 
@@ -656,12 +656,16 @@ function errorMessage(err) {
 }
 
 function isUnknownClientError(err) {
-  return errorMessage(err).includes("Unknown ForgeWebridge client");
+  const message = errorMessage(err);
+  return message.includes("Unknown DeepSeek-Forge Webridge client")
+    || message.includes("Unknown ForgeWebridge client");
 }
 
 function isAuthError(err) {
   const message = errorMessage(err);
-  return message.includes("ForgeAgent gateway request failed: 401")
+  return message.includes("DeepSeek-Forge gateway request failed: 401")
+    || message.includes("DeepSeek-Forge gateway request failed: 403")
+    || message.includes("ForgeAgent gateway request failed: 401")
     || message.includes("ForgeAgent gateway request failed: 403");
 }
 
@@ -673,7 +677,7 @@ async function getDeviceName() {
   const cfg = await chrome.storage.local.get(["deviceName"]);
   return typeof cfg.deviceName === "string" && cfg.deviceName.trim()
     ? cfg.deviceName.trim()
-    : "ForgeWebridge Chrome";
+    : "DeepSeek-Forge Webridge Chrome";
 }
 
 async function setStatus(state, message) {

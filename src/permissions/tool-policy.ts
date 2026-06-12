@@ -756,10 +756,10 @@ function workspaceTaskAllowReason(input: ToolPolicyInput): string | null {
     return "Read-only subagent coordination is allowed by default; any nested tool call still goes through normal permissions.";
   }
   if (input.tool.name === "agent_task_cancel") {
-    return "Cancelling a ForgeAgent background subagent task is allowed by default.";
+    return "Cancelling a DeepSeek-Forge background subagent task is allowed by default.";
   }
   if (input.tool.name === "task_kill") {
-    return "Stopping a ForgeAgent-managed background shell task is allowed by default.";
+    return "Stopping a DeepSeek-Forge-managed background shell task is allowed by default.";
   }
   return null;
 }
@@ -787,25 +787,25 @@ function destructiveShellDenyReason(input: ToolPolicyInput): string | null {
   if (!command) return null;
   const normalized = command.replace(/\s+/g, " ");
   if (/\brm\s+-[A-Za-z]*r[A-Za-z]*f[A-Za-z]*\s+(?:\/|\/\*|~|~\/|\$HOME(?:\/|$))/.test(normalized)) {
-    return "This command attempts a recursive forced delete of a system, home, or root path. ForgeAgent hard-denies this class of destructive command; use targeted workspace file tools or ask the user for a specific safe path.";
+    return "This command attempts a recursive forced delete of a system, home, or root path. DeepSeek-Forge hard-denies this class of destructive command; use targeted workspace file tools or ask the user for a specific safe path.";
   }
   if (/\bgit\s+reset\s+--hard\b/i.test(normalized)) {
-    return "This command can discard workspace changes without a reversible ForgeAgent checkpoint. ForgeAgent hard-denies git reset --hard; inspect git_diff and use targeted revert_file_change, exit_worktree keep/remove, or ask the user for a safer recovery plan.";
+    return "This command can discard workspace changes without a reversible DeepSeek-Forge checkpoint. DeepSeek-Forge hard-denies git reset --hard; inspect git_diff and use targeted revert_file_change, exit_worktree keep/remove, or ask the user for a safer recovery plan.";
   }
   if (/\bgit\s+push\b[\s\S]*\s--force(?:-with-lease)?\b/i.test(normalized)) {
-    return "This command force-pushes git history. ForgeAgent hard-denies force pushes from the workspace automation path.";
+    return "This command force-pushes git history. DeepSeek-Forge hard-denies force pushes from the workspace automation path.";
   }
   if (/\bgit\s+commit\b[\s\S]*\s--no-verify\b/i.test(normalized)) {
-    return "This command skips commit hooks. ForgeAgent hard-denies --no-verify by default because it bypasses project validation.";
+    return "This command skips commit hooks. DeepSeek-Forge hard-denies --no-verify by default because it bypasses project validation.";
   }
   if (/\b(?:mkfs|diskutil\s+erase\w*|shutdown|reboot|halt|poweroff)\b/i.test(normalized)) {
-    return "This command can erase disks or shut down the machine. ForgeAgent hard-denies system-destructive commands.";
+    return "This command can erase disks or shut down the machine. DeepSeek-Forge hard-denies system-destructive commands.";
   }
   if (/\bdd\b[\s\S]*\bof=\/dev\//i.test(normalized)) {
-    return "This command writes raw bytes to a device path. ForgeAgent hard-denies raw device writes.";
+    return "This command writes raw bytes to a device path. DeepSeek-Forge hard-denies raw device writes.";
   }
   if (/\bchmod\s+-R\s+777\s+(?:\/|~|~\/|\$HOME(?:\/|$))/i.test(normalized)) {
-    return "This command recursively weakens permissions on a system or home path. ForgeAgent hard-denies broad permission changes.";
+    return "This command recursively weakens permissions on a system or home path. DeepSeek-Forge hard-denies broad permission changes.";
   }
   return null;
 }

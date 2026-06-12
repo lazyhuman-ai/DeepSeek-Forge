@@ -12,6 +12,13 @@ export function buildRenderEvents(events: SessionEvent[]): RenderEvent[] {
   let stream: Extract<RenderEvent, { type: "assistant_stream" }> | null = null;
 
   for (const event of events) {
+    if (
+      event.type === "permission_grant_event" ||
+      (event.type === "runtime_event" && event.runtimeKind === "permission")
+    ) {
+      continue;
+    }
+
     if (event.type === "assistant_delta") {
       if (!stream) {
         stream = {

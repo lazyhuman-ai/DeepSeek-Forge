@@ -197,7 +197,7 @@ describe("HTTP Gateway auth and multi-device sync", () => {
     const identity = await request("GET", "/identity");
     expect(identity.status).toBe(200);
     expect(identity.data).toMatchObject({
-      app: "ForgeAgent",
+      app: "DeepSeek-Forge",
       protocolVersion: 1,
     });
     expect((identity.data as { coreId: string }).coreId).toMatch(/^forge-core-/);
@@ -207,7 +207,7 @@ describe("HTTP Gateway auth and multi-device sync", () => {
     const health = await request("GET", "/health");
     expect(health.status).toBe(200);
     expect(health.data).toMatchObject({
-      app: "ForgeAgent",
+      app: "DeepSeek-Forge",
       status: "ready",
       auth: { mode: "device" },
       coreId: (identity.data as { coreId: string }).coreId,
@@ -219,7 +219,7 @@ describe("HTTP Gateway auth and multi-device sync", () => {
     expect(discovery.status).toBe(200);
     expect(discovery.headers["access-control-allow-origin"]).toBe("chrome-extension://forgewebridge-test");
     expect(discovery.data).toMatchObject({
-      app: "ForgeAgent",
+      app: "DeepSeek-Forge",
       discoveryVersion: 1,
       capabilities: {
         deviceAuth: true,
@@ -301,7 +301,7 @@ describe("HTTP Gateway auth and multi-device sync", () => {
       origin: "chrome-extension://forgewebridge-test",
       body: {
         code: (code.data as { code: string }).code,
-        name: "ForgeWebridge Chrome",
+        name: "DeepSeek-Forge Webridge Chrome",
         kind: "web",
       },
     });

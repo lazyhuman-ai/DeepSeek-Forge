@@ -5,7 +5,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
-const app = join(root, "apps/macos/ForgeAgentMac/dist/ForgeAgent.app");
+const app = join(root, "apps/macos/ForgeAgentMac/dist/DeepSeek-Forge.app");
+const legacyApp = join(root, "apps/macos/ForgeAgentMac/dist/ForgeAgent.app");
 const label = "com.forgeagent.gateway";
 const domain = `gui/${process.getuid?.() ?? 501}`;
 const plist = join(homedir(), "Library/LaunchAgents", `${label}.plist`);
@@ -31,7 +32,8 @@ function runQuiet(command, args) {
 
 function launchScriptTargetsDistApp() {
   if (!existsSync(launchScript)) return false;
-  return readFileSync(launchScript, "utf-8").includes(`${app}/Contents/`);
+  const content = readFileSync(launchScript, "utf-8");
+  return content.includes(`${app}/Contents/`) || content.includes(`${legacyApp}/Contents/`);
 }
 
 function launchdLoaded() {
@@ -45,7 +47,7 @@ function findDistAppPids() {
   } catch {
     return [];
   }
-  const marker = `${app}/Contents/`;
+  const markers = [`${app}/Contents/`, `${legacyApp}/Contents/`];
   return output
     .split("\n")
     .map((line) => line.trim())
@@ -55,7 +57,7 @@ function findDistAppPids() {
       if (!match) return undefined;
       return { pid: Number(match[1]), command: match[2] };
     })
-    .filter((entry) => entry && entry.pid !== process.pid && entry.command.includes(marker))
+    .filter((entry) => entry && entry.pid !== process.pid && markers.some((marker) => entry.command.includes(marker)))
     .map((entry) => entry.pid);
 }
 
@@ -97,6 +99,9 @@ function stopRunningDistApp() {
 
 function restoreDistAppService(state) {
   if (!state.stoppedLaunchd || !state.wasLoaded || !existsSync(plist)) return;
+  if (existsSync(launchScript) && readFileSync(launchScript, "utf-8").includes(`${legacyApp}/Contents/`)) {
+    return;
+  }
   runQuiet("launchctl", ["bootstrap", domain, plist]);
   runQuiet("launchctl", ["kickstart", "-k", `${domain}/${label}`]);
 }

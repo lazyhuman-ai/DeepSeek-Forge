@@ -41,7 +41,7 @@ async function handler(
   const readFileState = readFileStateForContext(context);
   const state = readFileState.get(filePath);
   if (!state || state.isPartialView) {
-    return toolError("File has not been read yet. Read it first before deleting so ForgeAgent can record a reversible checkpoint.");
+    return toolError("File has not been read yet. Read it first before deleting so DeepSeek-Forge can record a reversible checkpoint.");
   }
 
   const fileText = readTextFile(filePath);

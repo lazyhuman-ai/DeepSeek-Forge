@@ -44,7 +44,7 @@ async function handler(
           `Persisted status: ${persisted.status}.`,
           `Command: ${persisted.command}`,
           persisted.status === "running"
-            ? "Recovery: ForgeAgent restarted or lost the original process handle before this task finished. There is nothing active to kill from this process; start a fresh command if needed."
+            ? "Recovery: DeepSeek-Forge restarted or lost the original process handle before this task finished. There is nothing active to kill from this process; start a fresh command if needed."
             : "Recovery: no action is needed unless you want to start a fresh command.",
         ].join("\n"),
         isError: true,
@@ -58,7 +58,7 @@ async function handler(
         `Latest durable status: ${latest.status}.`,
         `Command: ${latest.command}`,
         latest.status === "running"
-          ? "Recovery: the ForgeAgent process likely restarted before this task finished. There is nothing active to kill; start a fresh command if needed."
+          ? "Recovery: the DeepSeek-Forge process likely restarted before this task finished. There is nothing active to kill; start a fresh command if needed."
           : "Recovery: no action is needed unless you want to start a fresh command.",
       ].join("\n"),
       isError: true,

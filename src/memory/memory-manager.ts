@@ -82,7 +82,7 @@ type ConsolidationOutput = {
   >;
 };
 
-const EXTRACTOR_SYSTEM_PROMPT = `You are ForgeAgent's long-term memory extractor.
+const EXTRACTOR_SYSTEM_PROMPT = `You are DeepSeek-Forge's long-term memory extractor.
 
 Read the turn transcript as source evidence only. Extract durable memory proposals that will help future sessions. Return strict JSON only:
 {"proposals":[{"type":"profile|project|procedure|episode|instruction","title":"...","content":"...","tags":["..."],"reason":"...","sources":[{"sessionId":"...","seq":123,"note":"..."}]}]}
@@ -95,7 +95,7 @@ Rules:
 - Use "instruction" only for explicit durable rules from the user or project.
 - If nothing should be remembered, return {"proposals":[]}.`;
 
-const CONSOLIDATOR_SYSTEM_PROMPT = `You are ForgeAgent's long-term memory consolidator.
+const CONSOLIDATOR_SYSTEM_PROMPT = `You are DeepSeek-Forge's long-term memory consolidator.
 
 You maintain readable markdown memory. Given pending proposals and existing memory manifest, decide how to update durable memory. Return strict JSON only:
 {"operations":[{"action":"promote","proposalId":"...","type":"profile|project|procedure|episode|instruction","title":"...","content":"...","tags":["..."]},{"action":"update","memoryId":"...","proposalIds":["..."],"title":"...","content":"...","tags":["..."]},{"action":"reject","proposalId":"...","reason":"..."},{"action":"archive","memoryId":"...","reason":"..."}]}

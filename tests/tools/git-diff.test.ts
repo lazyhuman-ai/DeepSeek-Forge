@@ -35,7 +35,7 @@ beforeEach(() => {
   mkdirSync(tmpDir, { recursive: true });
   git(["init"]);
   git(["config", "user.email", "forgeagent@example.test"]);
-  git(["config", "user.name", "ForgeAgent Test"]);
+  git(["config", "user.name", "DeepSeek-Forge Test"]);
   writeFileSync(resolve(tmpDir, "app.ts"), "export const value = 1;\n");
   git(["add", "app.ts"]);
   git(["commit", "-m", "initial"]);

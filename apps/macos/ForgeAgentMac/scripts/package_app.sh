@@ -6,7 +6,8 @@ PROJECT_ROOT="$(cd "$ROOT/../../.." && pwd)"
 BIN_DIR="$(swift build -c release --package-path "$ROOT" --show-bin-path)"
 BIN="$BIN_DIR/ForgeAgentMac"
 POWER_HELPER="$BIN_DIR/ForgeAgentPowerHelper"
-APP="$ROOT/dist/ForgeAgent.app"
+APP="$ROOT/dist/DeepSeek-Forge.app"
+LEGACY_APP="$ROOT/dist/ForgeAgent.app"
 RESOURCES="$APP/Contents/Resources"
 CORE="$RESOURCES/ForgeAgentCore"
 NODE_BIN="$(command -v node)"
@@ -27,8 +28,12 @@ restore_dist_app_service() {
   if [[ "$DIST_SERVICE_STOPPED" != "1" ]] || [[ "$DIST_SERVICE_WAS_LOADED" != "1" ]]; then
     return
   fi
+  if [[ -f "$LAUNCHD_START" ]] && grep -Fq "$LEGACY_APP/Contents/" "$LAUNCHD_START"; then
+    echo "Not restoring legacy ForgeAgent launchd service; open DeepSeek-Forge.app to reinstall it." >&2
+    return
+  fi
   if [[ ! -f "$LAUNCHD_PLIST" ]]; then
-    echo "ForgeAgent launchd plist was removed while packaging; not restoring $LAUNCHD_LABEL" >&2
+    echo "DeepSeek-Forge launchd plist was removed while packaging; not restoring $LAUNCHD_LABEL" >&2
     return
   fi
   launchctl bootstrap "$LAUNCHD_DOMAIN" "$LAUNCHD_PLIST" >/dev/null 2>&1 || true
@@ -36,7 +41,7 @@ restore_dist_app_service() {
 }
 
 stop_running_dist_app() {
-  if [[ -f "$LAUNCHD_START" ]] && grep -Fq "$APP/Contents/" "$LAUNCHD_START"; then
+  if [[ -f "$LAUNCHD_START" ]] && { grep -Fq "$APP/Contents/" "$LAUNCHD_START" || grep -Fq "$LEGACY_APP/Contents/" "$LAUNCHD_START"; }; then
     if launchctl print "$LAUNCHD_DOMAIN/$LAUNCHD_LABEL" >/dev/null 2>&1; then
       DIST_SERVICE_WAS_LOADED=1
     fi
@@ -48,13 +53,15 @@ stop_running_dist_app() {
   fi
 
   for _ in 1 2 3 4 5; do
-    if ! pgrep -f "$APP/Contents/" >/dev/null 2>&1; then
+    if ! pgrep -f "$APP/Contents/" >/dev/null 2>&1 && ! pgrep -f "$LEGACY_APP/Contents/" >/dev/null 2>&1; then
       return
     fi
     pkill -TERM -f "$APP/Contents/" || true
+    pkill -TERM -f "$LEGACY_APP/Contents/" || true
     sleep 0.2
   done
   pkill -KILL -f "$APP/Contents/" || true
+  pkill -KILL -f "$LEGACY_APP/Contents/" || true
 }
 
 cd "$PROJECT_ROOT"
@@ -93,11 +100,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key>
   <string>ForgeAgentMac</string>
   <key>CFBundleIdentifier</key>
-  <string>dev.forgeagent.mac</string>
+  <string>dev.deepseekforge.mac</string>
   <key>CFBundleName</key>
-  <string>ForgeAgent</string>
+  <string>DeepSeek-Forge</string>
   <key>CFBundleDisplayName</key>
-  <string>ForgeAgent</string>
+  <string>DeepSeek-Forge</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundlePackageType</key>
@@ -111,7 +118,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSMicrophoneUsageDescription</key>
-  <string>ForgeAgent uses the microphone to turn your voice input into chat text on this Mac.</string>
+  <string>DeepSeek-Forge uses the microphone to turn your voice input into chat text on this Mac.</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key>
@@ -121,7 +128,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <array>
     <dict>
       <key>CFBundleURLName</key>
-      <string>ForgeAgent Pairing</string>
+      <string>DeepSeek-Forge Pairing</string>
       <key>CFBundleURLSchemes</key>
       <array>
         <string>forgeagent</string>
@@ -131,5 +138,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+
+# Remove the old app bundle path so Dock and LaunchServices cannot keep using
+# the pre-rename app label.
+rm -rf "$LEGACY_APP"
+touch "$APP"
 
 echo "$APP"

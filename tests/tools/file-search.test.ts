@@ -16,7 +16,7 @@ beforeEach(() => {
   mkdirSync(tmpPath("src/components"), { recursive: true });
   writeFileSync(tmpPath("src/services/user-profile-service.ts"), "export const userProfile = true;\n");
   writeFileSync(tmpPath("src/components/UserCard.tsx"), "export function UserCard() { return null; }\n");
-  writeFileSync(tmpPath("README.md"), "# ForgeAgent\n");
+  writeFileSync(tmpPath("README.md"), "# DeepSeek-Forge\n");
 });
 
 describe("file_search", () => {

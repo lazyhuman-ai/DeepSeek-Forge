@@ -152,7 +152,7 @@ function writeLaunchScript(options: LaunchAgentOptions): void {
   const content = [
     "#!/bin/zsh",
     "set -e",
-    "echo \"[launchd] starting ForgeAgent $(date -u +%Y-%m-%dT%H:%M:%SZ)\"",
+    "echo \"[launchd] starting DeepSeek-Forge $(date -u +%Y-%m-%dT%H:%M:%SZ)\"",
     `cd ${shellQuote(projectRoot)}`,
     `exec ${shellQuote(nodePath)} ${shellQuote(tsxPath)} ${shellQuote(mainPath)}`,
     "",

@@ -163,11 +163,11 @@ async function handler(
 
 export const lspDiagnosticsTool: ExecutableToolDefinition = buildTool({
   name: "lsp_diagnostics",
-  description: "Runs workspace language-server diagnostics and records structured diagnostic/check events. TypeScript/JavaScript use ForgeAgent's semantic service; Python uses pyright when available; Rust/Go/Java/Swift/Kotlin/C++ use their language server when available and report a clear timeout/error if diagnostics could not be published.",
+  description: "Runs workspace language-server diagnostics and records structured diagnostic/check events. TypeScript/JavaScript use DeepSeek-Forge's semantic service; Python uses pyright when available; Rust/Go/Java/Swift/Kotlin/C++ use their language server when available and report a clear timeout/error if diagnostics could not be published.",
   params: {
     command: {
       type: "string",
-      description: "Deprecated. Diagnostics use ForgeAgent's TypeScript language service adapter.",
+      description: "Deprecated. Diagnostics use DeepSeek-Forge's TypeScript language service adapter.",
       optional: true,
     },
   },

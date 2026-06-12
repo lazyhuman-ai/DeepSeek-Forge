@@ -31,7 +31,7 @@ describe("HTTP gateway run state", () => {
 
     const read = readRunState(DATA_DIR);
     expect(read).toMatchObject({
-      app: "ForgeAgent",
+      app: "DeepSeek-Forge",
       pid: process.pid,
       host: "127.0.0.1",
       port: 3000,

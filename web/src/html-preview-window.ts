@@ -8,7 +8,7 @@ export type StoredHtmlPreview = {
   expiresAt: number;
 };
 
-export function storeHtmlPreview(html: string, title = "ForgeAgent HTML Preview"): string {
+export function storeHtmlPreview(html: string, title = "DeepSeek-Forge HTML Preview"): string {
   cleanupExpiredHtmlPreviews();
   const id = crypto.randomUUID();
   const now = Date.now();

@@ -59,6 +59,10 @@ function defaultName(path: string): string {
   return basename(path) || "Workspace";
 }
 
+function productName(value: string): string {
+  return value.replaceAll("ForgeAgent", "DeepSeek-Forge");
+}
+
 function normalizeProject(input: Project): Project {
   const status: ProjectStatus = input.status === "archived"
     ? "archived"
@@ -67,7 +71,7 @@ function normalizeProject(input: Project): Project {
       : "missing";
   return {
     ...input,
-    name: input.name || defaultName(input.path),
+    name: productName(input.name || defaultName(input.path)),
     status,
     trustState: input.trustState === "untrusted" ? "untrusted" : "trusted",
   };
@@ -84,7 +88,7 @@ function readJson<T>(filePath: string, fallback: T): T {
 
 export function defaultWorkspacePath(): string {
   return process.env.FORGE_DEFAULT_WORKSPACE_PATH ||
-    join(homedir(), "Documents", "ForgeAgent Workspace");
+    join(homedir(), "Documents", "DeepSeek-Forge Workspace");
 }
 
 export class ProjectStore {
@@ -133,7 +137,7 @@ export class ProjectStore {
       return normalized;
     }
     return this.create({
-      name: "ForgeAgent Workspace",
+      name: "DeepSeek-Forge Workspace",
       path,
       create: true,
       trustState: "trusted",

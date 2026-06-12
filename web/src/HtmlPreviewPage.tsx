@@ -8,7 +8,7 @@ export function HtmlPreviewPage() {
     return (
       <main className="standalone-preview-missing">
         <h1>Preview expired</h1>
-        <p>This HTML preview is no longer available. Return to ForgeAgent and open it again.</p>
+        <p>This HTML preview is no longer available. Return to DeepSeek-Forge and open it again.</p>
       </main>
     );
   }
@@ -21,7 +21,7 @@ export function HtmlPreviewPage() {
           if (window.history.length > 1) window.history.back();
           else window.location.href = "/";
         }}>
-          Back to ForgeAgent
+          Back to DeepSeek-Forge
         </button>
       </div>
       <iframe

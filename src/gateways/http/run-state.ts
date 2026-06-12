@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import { FORGE_AGENT_APP_NAME, FORGE_AGENT_VERSION } from "../../core/app-info.js";
+import { FORGE_AGENT_APP_NAME, FORGE_AGENT_VERSION, isDeepSeekForgeAppName } from "../../core/app-info.js";
 
 export type GatewayRunState = {
   app: typeof FORGE_AGENT_APP_NAME;
@@ -42,7 +42,7 @@ export function readRunState(dataDir = ".forge"): GatewayRunState | null {
   if (!existsSync(statePath)) return null;
   try {
     const parsed = JSON.parse(readFileSync(statePath, "utf-8")) as Partial<GatewayRunState>;
-    if (parsed.app !== FORGE_AGENT_APP_NAME) return null;
+    if (!isDeepSeekForgeAppName(parsed.app)) return null;
     if (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || parsed.pid <= 0) return null;
     if (typeof parsed.host !== "string" || typeof parsed.port !== "number") return null;
     if (typeof parsed.url !== "string" || typeof parsed.dataDir !== "string") return null;

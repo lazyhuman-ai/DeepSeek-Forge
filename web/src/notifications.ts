@@ -27,19 +27,19 @@ export function nativeNotificationForEvent(
   switch (event.type) {
     case "permission_request":
       return {
-        title: "ForgeAgent needs approval",
+        title: "DeepSeek-Forge needs approval",
         body: truncate(event.message || `${event.toolName} needs approval.`),
         tag: `forgeagent:${sessionId}:${event.seq}`,
       };
     case "mcp_elicitation_request":
       return {
-        title: "ForgeAgent needs input",
+        title: "DeepSeek-Forge needs input",
         body: truncate(event.message),
         tag: `forgeagent:${sessionId}:${event.seq}`,
       };
     case "assistant_message":
       return {
-        title: "ForgeAgent replied",
+        title: "DeepSeek-Forge replied",
         body: truncate(stripMarkup(event.text)),
         tag: `forgeagent:${sessionId}:${event.seq}`,
       };

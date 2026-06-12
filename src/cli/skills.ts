@@ -201,7 +201,7 @@ function doctorCommand(store: SkillStore, options: CliOptions): void {
     output(status, options);
     return;
   }
-  console.log("ForgeAgent skills doctor");
+  console.log("DeepSeek-Forge skills doctor");
   console.log(`Root: ${store.rootDir}`);
   console.log(`Manifest: ${status.manifestPath}`);
   console.log(`Active: ${status.active}`);

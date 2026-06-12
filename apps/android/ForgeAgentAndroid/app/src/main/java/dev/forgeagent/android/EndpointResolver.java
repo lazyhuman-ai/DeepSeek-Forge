@@ -40,7 +40,7 @@ public final class EndpointResolver {
     }
 
     public Result resolve(ForgeConnection connection) {
-        if (connection == null) return Result.error("No ForgeAgent connection is selected.");
+        if (connection == null) return Result.error("No DeepSeek-Forge connection is selected.");
         if (!connection.hasToken()) return Result.error("This connection is missing its device token. Pair it again from the Mac.");
         ArrayList<String> candidates = candidates(connection);
         if (candidates.isEmpty()) return Result.error("This connection has no saved address. Add a remote URL or pair again.");
@@ -50,8 +50,8 @@ public final class EndpointResolver {
         for (String endpoint : candidates) {
             try {
                 IdentityProbe identity = probeIdentity(endpoint);
-                if (!identity.isForgeAgent) {
-                    String message = host(endpoint) + " does not look like a ForgeAgent gateway. It returned " + identity.message + ".";
+                if (!identity.isDeepSeekForge) {
+                    String message = host(endpoint) + " does not look like a DeepSeek-Forge gateway. It returned " + identity.message + ".";
                     int priority = endpointErrorPriority(endpoint);
                     if (priority >= lastErrorPriority) {
                         lastError = message;
@@ -65,12 +65,12 @@ public final class EndpointResolver {
                     !identity.coreId.isEmpty() &&
                     !connection.coreId.equals(identity.coreId)
                 ) {
-                    lastError = host(endpoint) + " is a different ForgeAgent desktop.";
+                    lastError = host(endpoint) + " is a different DeepSeek-Forge desktop.";
                     lastErrorPriority = Math.max(lastErrorPriority, endpointErrorPriority(endpoint));
                     continue;
                 }
                 if (connection.coreId != null && !connection.coreId.isEmpty() && identity.coreId.isEmpty()) {
-                    lastError = host(endpoint) + " is ForgeAgent, but it does not expose a desktop identity. Restart or update the Mac app, then retry.";
+                    lastError = host(endpoint) + " is DeepSeek-Forge, but it does not expose a desktop identity. Restart or update the Mac app, then retry.";
                     lastErrorPriority = Math.max(lastErrorPriority, endpointErrorPriority(endpoint));
                     continue;
                 }
@@ -84,7 +84,7 @@ public final class EndpointResolver {
 
                 if (!identity.coreId.isEmpty()) connection.coreId = identity.coreId;
                 String desktopName = identity.desktopName;
-                if (desktopName.length() > 0 && (connection.name == null || connection.name.isEmpty() || "ForgeAgent Desktop".equals(connection.name) || connection.name.equals(host(connection.displayEndpoint())))) {
+                if (desktopName.length() > 0 && (connection.name == null || connection.name.isEmpty() || "ForgeAgent Desktop".equals(connection.name) || "DeepSeek-Forge Desktop".equals(connection.name) || connection.name.equals(host(connection.displayEndpoint())))) {
                     connection.name = desktopName;
                 }
                 connection.markOnline(endpoint);
@@ -103,7 +103,7 @@ public final class EndpointResolver {
                     lastErrorPriority = priority;
                 }
             } catch (NonJsonResponseException ex) {
-                String message = host(endpoint) + " returned a web page instead of the ForgeAgent API. Restart or update the Mac app and retry.";
+                String message = host(endpoint) + " returned a web page instead of the DeepSeek-Forge API. Restart or update the Mac app and retry.";
                 int priority = endpointErrorPriority(endpoint);
                 if (priority >= lastErrorPriority) {
                     lastError = message;
@@ -120,7 +120,7 @@ public final class EndpointResolver {
         }
 
         connection.markOffline(lastError.isEmpty()
-            ? "ForgeAgent is not reachable. The Mac may be asleep/offline, Tailscale may be disconnected, or every saved remote URL may be unreachable."
+            ? "DeepSeek-Forge is not reachable. The Mac may be asleep/offline, Tailscale may be disconnected, or every saved remote URL may be unreachable."
             : lastError);
         persist(connection);
         return Result.error(connection.statusMessage);
@@ -155,7 +155,7 @@ public final class EndpointResolver {
                 JSONObject json = getJson(endpoint, path, "");
                 String app = json.optString("app", "");
                 String coreId = json.optString("coreId", "");
-                if ("ForgeAgent".equals(app) || coreId.startsWith("forge-core-")) {
+                if ("DeepSeek-Forge".equals(app) || "ForgeAgent".equals(app) || coreId.startsWith("forge-core-")) {
                     return new IdentityProbe(
                         true,
                         coreId,
@@ -163,7 +163,7 @@ public final class EndpointResolver {
                         path
                     );
                 }
-                lastMessage = "JSON without a ForgeAgent identity from " + path;
+                lastMessage = "JSON without a DeepSeek-Forge identity from " + path;
             } catch (NonJsonResponseException ex) {
                 lastMessage = ex.message;
             } catch (HttpStatusException ex) {
@@ -227,12 +227,12 @@ public final class EndpointResolver {
                 + " is a Tailscale address, but it returned HTTP " + status + ". "
                 + phoneState
                 + " Open Tailscale on this phone, confirm it is connected to the same account/tailnet as the Mac, then retry. "
-                + "If you are using Tailscale Serve, point it to the ForgeAgent Core port shown in Pair Mobile.";
+                + "If you are using Tailscale Serve, point it to the DeepSeek-Forge Core port shown in Pair Mobile.";
         }
         if (status == 502 || status == 503 || status == 504) {
             return ForgeConnection.hostLabel(endpoint)
-                + " returned HTTP " + status + ". A remote tunnel or proxy reached something, but its backend ForgeAgent Core is not available. "
-                + "Check that the Mac is awake, ForgeAgent Core is running, and the remote URL points to the current Core port.";
+                + " returned HTTP " + status + ". A remote tunnel or proxy reached something, but its backend DeepSeek-Forge Core is not available. "
+                + "Check that the Mac is awake, DeepSeek-Forge Core is running, and the remote URL points to the current Core port.";
         }
         return ForgeConnection.hostLabel(endpoint) + " returned HTTP " + status + ".";
     }
@@ -255,13 +255,13 @@ public final class EndpointResolver {
     }
 
     private static final class IdentityProbe {
-        final boolean isForgeAgent;
+        final boolean isDeepSeekForge;
         final String coreId;
         final String desktopName;
         final String message;
 
-        IdentityProbe(boolean isForgeAgent, String coreId, String desktopName, String message) {
-            this.isForgeAgent = isForgeAgent;
+        IdentityProbe(boolean isDeepSeekForge, String coreId, String desktopName, String message) {
+            this.isDeepSeekForge = isDeepSeekForge;
             this.coreId = coreId == null ? "" : coreId;
             this.desktopName = desktopName == null ? "" : desktopName;
             this.message = message == null ? "" : message;

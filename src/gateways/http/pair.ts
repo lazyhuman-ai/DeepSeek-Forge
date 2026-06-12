@@ -40,7 +40,7 @@ function main(): void {
   const store = new AuthStore(join(dataDir, "auth"));
   const issued = store.issuePairingCode();
 
-  console.log("ForgeAgent pairing code created.");
+  console.log("DeepSeek-Forge pairing code created.");
   console.log(`Device name: ${name}`);
   console.log(`Code: ${issued.code}`);
   console.log(`Expires at: ${issued.expiresAt}`);

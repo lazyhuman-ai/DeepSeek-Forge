@@ -204,7 +204,7 @@ describe("workspace edit tools", () => {
     expect(readFileSync(filePath, "utf-8")).toBe("A “updated value”\nB ‘other value’");
   });
 
-  it("reverts the latest ForgeAgent edit checkpoint for a file", async () => {
+  it("reverts the latest DeepSeek-Forge edit checkpoint for a file", async () => {
     const events: SessionEvent[] = [];
     const filePath = tmpPath("revert.txt");
     writeFileSync(filePath, "before\n");
@@ -233,7 +233,7 @@ describe("workspace edit tools", () => {
       },
     );
 
-    expect(result).toContain("Reverted latest ForgeAgent edit checkpoint");
+    expect(result).toContain("Reverted latest DeepSeek-Forge edit checkpoint");
     expect(readFileSync(filePath, "utf-8")).toBe("before\n");
     expect(events.filter((event) => event.type === "diff_event")).toHaveLength(2);
   });
@@ -272,7 +272,7 @@ describe("workspace edit tools", () => {
     expect(readFileSync(filePath, "utf-8")).toBe("user change\n");
   });
 
-  it("reverts a ForgeAgent-created file by deleting it", async () => {
+  it("reverts a DeepSeek-Forge-created file by deleting it", async () => {
     const events: SessionEvent[] = [];
     const filePath = tmpPath("created.txt");
     const manager = activity(events);

@@ -8,9 +8,8 @@ const root = process.cwd();
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf-8"));
 const version = String(pkg.version ?? "0.0.0");
 const dist = resolve(root, ".forge-release/dist");
-const app = join(root, "apps/macos/ForgeAgentMac/dist/ForgeAgent.app");
+const app = join(root, "apps/macos/ForgeAgentMac/dist/DeepSeek-Forge.app");
 const androidApk = join(root, "apps/android/ForgeAgentAndroid/app/build/outputs/apk/debug/app-debug.apk");
-const webridgePackage = findWebridgePackage();
 
 function fail(message) {
   console.error(`[release-bundle] FAIL ${message}`);
@@ -31,7 +30,7 @@ function findWebridgePackage() {
   const releaseDir = join(root, ".forge-release/dist");
   if (!existsSync(releaseDir)) return undefined;
   const zips = readdirSync(releaseDir)
-    .filter((name) => /^ForgeWebridge-.+\.zip$/.test(name))
+    .filter((name) => /^DeepSeek-Forge-Webridge-.+\.zip$/.test(name))
     .map((name) => join(releaseDir, name))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
   const zip = zips[0];
@@ -41,6 +40,15 @@ function findWebridgePackage() {
     zip,
     manifest: existsSync(manifest) ? manifest : undefined,
   };
+}
+
+function removeLegacyArtifacts() {
+  if (!existsSync(dist)) return;
+  for (const name of readdirSync(dist)) {
+    if (/^(ForgeAgent|ForgeWebridge)-.+\.(zip|apk|json)$/.test(name)) {
+      rmSync(join(dist, name), { force: true });
+    }
+  }
 }
 
 function sha256(path) {
@@ -56,7 +64,7 @@ function copyArtifact(source, targetName) {
 
 function zipMacApp() {
   assertDir(app, "macOS app bundle");
-  const target = join(dist, `ForgeAgent-${version}-macos-arm64.zip`);
+  const target = join(dist, `DeepSeek-Forge-${version}-macos-arm64.zip`);
   rmSync(target, { force: true });
   execFileSync("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", app, target], {
     cwd: root,
@@ -67,12 +75,14 @@ function zipMacApp() {
 
 function main() {
   mkdirSync(dist, { recursive: true });
+  removeLegacyArtifacts();
+  const webridgePackage = findWebridgePackage();
 
   const artifacts = [];
   const macZip = zipMacApp();
   artifacts.push({ name: basename(macZip), path: macZip, platform: "macos", kind: "app_zip" });
 
-  const apk = copyArtifact(androidApk, `ForgeAgent-${version}-android-debug.apk`);
+  const apk = copyArtifact(androidApk, `DeepSeek-Forge-${version}-android-debug.apk`);
   artifacts.push({ name: basename(apk), path: apk, platform: "android", kind: "debug_apk" });
 
   if (webridgePackage?.zip) {
@@ -89,7 +99,7 @@ function main() {
   writeFileSync(checksumsPath, checksums, "utf-8");
 
   const manifest = {
-    name: "ForgeAgent",
+    name: "DeepSeek-Forge",
     version,
     generatedAt: new Date().toISOString(),
     releaseGate: "Run `npm run release:gate` before publishing these artifacts.",

@@ -50,7 +50,7 @@ async function handler(
         ? `Last known output preview:\n${latest.outputPreview}`
         : "No live process or buffered output is available. This task state was recovered from the durable thread, not from an active background process.",
       latest.status === "running"
-        ? "Recovery: the ForgeAgent process may have restarted before this background task finished. Start the command again if it is still needed."
+        ? "Recovery: the DeepSeek-Forge process may have restarted before this background task finished. Start the command again if it is still needed."
         : undefined,
     ].filter((line) => line !== undefined).join("\n");
   }

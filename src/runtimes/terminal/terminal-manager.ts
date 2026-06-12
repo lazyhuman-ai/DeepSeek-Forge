@@ -109,7 +109,7 @@ function normalizeCwd(cwd: string | undefined): string {
 
 function initialPrompt(cwd: string, shell: string): string {
   return [
-    `ForgeAgent Terminal`,
+    `DeepSeek-Forge Terminal`,
     `user: ${userInfo().username}`,
     `cwd: ${cwd}`,
     `shell: ${shell}`,

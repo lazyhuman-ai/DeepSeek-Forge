@@ -9,7 +9,7 @@ const CACHE_TTL_MS = 15 * 60 * 1000;
 
 const urlCache = new Map<string, { content: string; timestamp: number }>();
 
-const FORGEAGENT_USER_AGENT = "ForgeAgent/1.0";
+const FORGEAGENT_USER_AGENT = "DeepSeek-Forge/1.0";
 
 async function handler(
   args: Record<string, unknown>,

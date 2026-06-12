@@ -1,13 +1,38 @@
 #!/usr/bin/env node
 import { execFileSync, spawnSync } from "node:child_process";
-import { accessSync, constants, existsSync, readdirSync, statSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const projectRoot = process.cwd();
-const appRoot = join(projectRoot, "apps/macos/ForgeAgentMac/dist/ForgeAgent.app");
+const appRoot = join(projectRoot, "apps/macos/ForgeAgentMac/dist/DeepSeek-Forge.app");
+const legacyAppRoot = join(projectRoot, "apps/macos/ForgeAgentMac/dist/ForgeAgent.app");
 const contents = join(appRoot, "Contents");
 const resources = join(contents, "Resources");
 const core = join(resources, "ForgeAgentCore");
+const legacyVisibleBrandPhrases = [
+  "Opening ForgeAgent",
+  "Ask ForgeAgent",
+  "ForgeAgent is running",
+  "Provider saved. ForgeAgent",
+  "ForgeAgent never returns",
+  "normal ForgeAgent permissions",
+  "ForgeAgent Extensions",
+  "ForgeAgent Library",
+  "ForgeAgent will",
+  "ForgeAgent API returned non-JSON content",
+  "Restart ForgeAgent",
+  "Open the ForgeAgent Android",
+  "Scan with ForgeAgent Android",
+  "Optimize Tailscale for ForgeAgent",
+  "ForgeAgent found",
+  "Only this Mac can reach ForgeAgent",
+  "Uploaded files available to ForgeAgent",
+  "Back to ForgeAgent",
+  "Return to ForgeAgent",
+  "ForgeAgent Web Console",
+  'children:"ForgeAgent"',
+  'label:"ForgeAgent"',
+];
 
 function fail(message) {
   console.error(`[macos-smoke] FAIL ${message}`);
@@ -40,6 +65,31 @@ function readInfoPlist() {
   return JSON.parse(raw);
 }
 
+function listDistFiles(dir) {
+  const entries = readdirSync(dir, { withFileTypes: true });
+  return entries.flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return listDistFiles(path);
+    return [path];
+  });
+}
+
+function assertNoLegacyVisibleBrand(appPath) {
+  const dist = join(appPath, "Contents/Resources/ForgeAgentCore/web/dist");
+  assertDir(dist, `${appPath} bundled Web Console dist`);
+  const files = listDistFiles(dist).filter((file) =>
+    /\.(?:html|js|css|json|webmanifest)$/i.test(file)
+  );
+  for (const file of files) {
+    const text = readFileSync(file, "utf-8");
+    for (const phrase of legacyVisibleBrandPhrases) {
+      if (text.includes(phrase)) {
+        fail(`legacy visible brand phrase "${phrase}" remains in ${file}`);
+      }
+    }
+  }
+}
+
 function bundledNodeVersion() {
   const nodePath = join(resources, "node/bin/node");
   let lastFailure = "not executed";
@@ -64,7 +114,7 @@ function bundledNodeVersion() {
 }
 
 function main() {
-  assertDir(appRoot, "ForgeAgent.app bundle");
+  assertDir(appRoot, "DeepSeek-Forge.app bundle");
   assertDir(contents, "Contents directory");
   assertDir(resources, "Resources directory");
   assertFile(join(contents, "MacOS/ForgeAgentMac"), "macOS app executable", true);
@@ -87,11 +137,15 @@ function main() {
 
   const info = readInfoPlist();
   if (info.CFBundleExecutable !== "ForgeAgentMac") fail("Info.plist CFBundleExecutable must be ForgeAgentMac");
-  if (info.CFBundleIdentifier !== "dev.forgeagent.mac") fail("Info.plist bundle identifier changed unexpectedly");
+  if (info.CFBundleIdentifier !== "dev.deepseekforge.mac") fail("Info.plist bundle identifier must be dev.deepseekforge.mac");
+  if (info.CFBundleDisplayName !== "DeepSeek-Forge") fail("Info.plist CFBundleDisplayName must be DeepSeek-Forge");
   if (info.CFBundleIconFile !== "AppIcon") fail("Info.plist CFBundleIconFile must reference AppIcon");
   if (info.NSAppTransportSecurity?.NSAllowsLocalNetworking !== true) fail("Info.plist must allow local networking for loopback Web Console");
   const schemes = info.CFBundleURLTypes?.flatMap((entry) => entry.CFBundleURLSchemes ?? []) ?? [];
   if (!schemes.includes("forgeagent")) fail("Info.plist must register the forgeagent:// URL scheme");
+  assertNoLegacyVisibleBrand(appRoot);
+
+  if (existsSync(legacyAppRoot)) fail("legacy ForgeAgent.app bundle must not be present; launch DeepSeek-Forge.app");
 
   console.log(`[macos-smoke] PASS app=${appRoot}`);
   console.log(`[macos-smoke] bundled_node=${nodeVersion}`);

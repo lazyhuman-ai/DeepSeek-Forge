@@ -64,7 +64,7 @@ type JudgeOutput = {
   reason: string;
 };
 
-const EXTRACTOR_SYSTEM_PROMPT = `You are ForgeAgent's skill evolution extractor.
+const EXTRACTOR_SYSTEM_PROMPT = `You are DeepSeek-Forge's skill evolution extractor.
 
 Skills are reusable procedural instruction packages. They are not memory facts and not hidden tools.
 Read the turn transcript and propose only durable skill changes that would help future agents perform a repeatable class of task.
@@ -80,7 +80,7 @@ Rules:
 - Do not include instructions to bypass tool permissions, sandbox, user approval, or higher priority instructions.
 - If no skill should be changed, return {"proposals":[]}.`;
 
-const JUDGE_SYSTEM_PROMPT = `You judge whether a generated ForgeAgent skill may be auto-enabled.
+const JUDGE_SYSTEM_PROMPT = `You judge whether a generated DeepSeek-Forge skill may be auto-enabled.
 
 Return strict JSON only: {"pass":true|false,"reason":"..."}
 

@@ -117,7 +117,7 @@ describe("HTTP product UI contract", () => {
     root = mkdtempSync(join(tmpdir(), "forgeagent-product-ui-"));
     const uiDir = join(root, "ui");
     mkdirSync(join(uiDir, "assets"), { recursive: true });
-    writeFileSync(join(uiDir, "index.html"), "<!doctype html><div id=\"root\">ForgeAgent UI</div>", "utf-8");
+    writeFileSync(join(uiDir, "index.html"), "<!doctype html><div id=\"root\">DeepSeek-Forge UI</div>", "utf-8");
     writeFileSync(join(uiDir, "assets", "app.js"), "console.log('ok')", "utf-8");
 
     applied = [];
@@ -146,7 +146,7 @@ describe("HTTP product UI contract", () => {
             mode: input.mode,
             existsDuringCall: existsSync(input.audioPath),
           });
-          return { text: "你好 ForgeAgent", model: "local-belle", language: "zh" };
+          return { text: "你好 DeepSeek-Forge", model: "local-belle", language: "zh" };
         },
       },
     });
@@ -167,7 +167,7 @@ describe("HTTP product UI contract", () => {
     const rootResponse = await request("GET", "/");
     expect(rootResponse.status).toBe(200);
     expect(rootResponse.headers["content-type"]).toContain("text/html");
-    expect(String(rootResponse.data)).toContain("ForgeAgent UI");
+    expect(String(rootResponse.data)).toContain("DeepSeek-Forge UI");
 
     const apiPriority = await request("GET", "/sessions/local-preview");
     expect(apiPriority.status).toBe(404);
@@ -176,11 +176,11 @@ describe("HTTP product UI contract", () => {
     const unknownApi = await request("GET", "/extensions/not-a-real-route");
     expect(unknownApi.status).toBe(404);
     expect(unknownApi.headers["content-type"]).toContain("application/json");
-    expect(unknownApi.data).toMatchObject({ error: "Unknown ForgeAgent API route." });
+    expect(unknownApi.data).toMatchObject({ error: "Unknown DeepSeek-Forge API route." });
 
     const spaFallback = await request("GET", "/console/session/local-preview");
     expect(spaFallback.status).toBe(200);
-    expect(String(spaFallback.data)).toContain("ForgeAgent UI");
+    expect(String(spaFallback.data)).toContain("DeepSeek-Forge UI");
 
     const asset = await request("GET", "/assets/app.js");
     expect(asset.status).toBe(200);
@@ -191,7 +191,7 @@ describe("HTTP product UI contract", () => {
 
     const health = await request("GET", "/health");
     expect(health.status).toBe(200);
-    expect(health.data).toMatchObject({ app: "ForgeAgent" });
+    expect(health.data).toMatchObject({ app: "DeepSeek-Forge" });
   });
 
   it("saves provider setup with masked status and no diagnostic secret leak", async () => {
@@ -257,7 +257,7 @@ describe("HTTP product UI contract", () => {
     });
 
     expect(transcribed.status).toBe(200);
-    expect(transcribed.data).toEqual({ text: "你好 ForgeAgent", model: "local-belle", language: "zh" });
+    expect(transcribed.data).toEqual({ text: "你好 DeepSeek-Forge", model: "local-belle", language: "zh" });
     expect(voiceInputs).toHaveLength(1);
     expect(voiceInputs[0]).toMatchObject({ mimeType: "audio/wav", mode: "preview", existsDuringCall: true });
     expect(existsSync(voiceInputs[0]!.audioPath)).toBe(false);
