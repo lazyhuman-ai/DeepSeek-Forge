@@ -181,33 +181,14 @@ DeepSeek-Forge 面向单用户和个人设备。
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=lazyhuman-ai/forge-agent&type=Date)](https://www.star-history.com/#lazyhuman-ai/forge-agent&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=lazyhuman-ai/DeepSeek-Forge&type=Date)](https://www.star-history.com/#lazyhuman-ai/DeepSeek-Forge&Date)
 
 ## Contributors
 
 感谢所有参与 DeepSeek-Forge 的贡献者。
 
-<table>
-  <tr>
-    <td align="center">
-      <a href="https://github.com/leileqiTHU">
-        <img src="https://github.com/leileqiTHU.png?size=96" width="72" height="72" alt="雷乐其" />
-        <br />
-        <sub><b>雷乐其 (@leileqiTHU)</b></sub>
-      </a>
-    </td>
-    <td align="center">
-      <a href="https://github.com/putshua">
-        <img src="https://github.com/putshua.png?size=96" width="72" height="72" alt="putshua" />
-        <br />
-        <sub><b>putshua (@putshua)</b></sub>
-      </a>
-    </td>
-  </tr>
-</table>
-
-<a href="https://github.com/lazyhuman-ai/forge-agent/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=lazyhuman-ai/forge-agent" alt="Contributors" />
+<a href="https://github.com/lazyhuman-ai/DeepSeek-Forge/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=lazyhuman-ai/DeepSeek-Forge" alt="Contributors" />
 </a>
 
 ## License
