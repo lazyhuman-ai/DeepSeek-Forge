@@ -187,6 +187,18 @@ DeepSeek-Forge is intended for one user and their personal devices.
 
 Thanks to everyone who has contributed to DeepSeek-Forge.
 
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/leileqiTHU">
+        <img src="https://github.com/leileqiTHU.png?size=96" width="72" height="72" alt="雷乐其" />
+        <br />
+        <sub><b>雷乐其 (@leileqiTHU)</b></sub>
+      </a>
+    </td>
+  </tr>
+</table>
+
 <a href="https://github.com/lazyhuman-ai/forge-agent/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=lazyhuman-ai/forge-agent" alt="Contributors" />
 </a>
