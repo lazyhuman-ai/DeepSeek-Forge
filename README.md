@@ -94,18 +94,6 @@ The packaged app:
 - uses `ForgeAgentPowerHelper` to keep Core online while the display sleeps;
 - renders the same Web Console inside WKWebView.
 
-## Brand Assets
-
-The whale app icon is generated from one source file:
-
-```text
-assets/icon.png
-```
-
-Run `node scripts/generate-icons.mjs` after changing it. The script regenerates the Web/PWA icon, macOS iconset and `.icns`, Android launcher and notification resources, and ForgeWebridge Chrome extension icons.
-
-Android uses an adaptive launcher icon so the app drawer and home-screen icon show the whale without Android adding a second legacy white tile. Android notification `smallIcon` is still system-tinted by design; expanded notifications also set the whale as the large icon.
-
 ## Mobile
 
 DeepSeek-Forge is local-first. Your phone connects to the Mac running Core.
@@ -190,6 +178,18 @@ DeepSeek-Forge is intended for one user and their personal devices.
 - [Release checklist](docs/release-checklist.md)
 - [Blender MCP quick start](docs/blender-mcp-quickstart.md)
 - [Architecture spec](docs/forge_agent_v_2_architecture_spec.md)
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=lazyhuman-ai/forge-agent&type=Date)](https://www.star-history.com/#lazyhuman-ai/forge-agent&Date)
+
+## Contributors
+
+Thanks to everyone who has contributed to DeepSeek-Forge.
+
+<a href="https://github.com/lazyhuman-ai/forge-agent/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=lazyhuman-ai/forge-agent" alt="Contributors" />
+</a>
 
 ## License
 

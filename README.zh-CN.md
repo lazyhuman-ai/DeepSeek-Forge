@@ -94,18 +94,6 @@ open apps/macos/ForgeAgentMac/dist/DeepSeek-Forge.app
 - 使用 `ForgeAgentPowerHelper` 在屏幕休眠时保持 Core 在线；
 - 在 WKWebView 中渲染同一套 Web Console。
 
-## 品牌资产
-
-鲸鱼 App 图标只有一个源文件：
-
-```text
-assets/icon.png
-```
-
-修改后运行 `node scripts/generate-icons.mjs`。脚本会重新生成 Web/PWA 图标、macOS iconset 和 `.icns`、Android launcher 与通知资源，以及 ForgeWebridge Chrome 扩展图标。
-
-Android 使用 adaptive launcher icon，所以应用抽屉和桌面图标会直接显示鲸鱼图，不再被 Android 额外套一层旧式白色底板。Android 通知栏的 `smallIcon` 会被系统强制单色染色；展开通知时也会使用鲸鱼图作为 large icon。
-
 ## 移动端
 
 DeepSeek-Forge 是 local-first：手机连接的是正在运行 Core 的那台 Mac。
@@ -190,6 +178,18 @@ DeepSeek-Forge 面向单用户和个人设备。
 - [Release checklist](docs/release-checklist.md)
 - [Blender MCP quick start](docs/blender-mcp-quickstart.md)
 - [Architecture spec](docs/forge_agent_v_2_architecture_spec.md)
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=lazyhuman-ai/forge-agent&type=Date)](https://www.star-history.com/#lazyhuman-ai/forge-agent&Date)
+
+## Contributors
+
+感谢所有参与 DeepSeek-Forge 的贡献者。
+
+<a href="https://github.com/lazyhuman-ai/forge-agent/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=lazyhuman-ai/forge-agent" alt="Contributors" />
+</a>
 
 ## License
 
