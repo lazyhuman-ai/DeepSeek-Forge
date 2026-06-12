@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
 import QRCode from "qrcode";
 import { api, ensureDeviceToken, forgetDeviceToken, pairWithCode } from "./api";
 import { AssistantContent } from "./AssistantContent";
@@ -17,6 +17,8 @@ import type {
   ExtensionCandidate,
   ExtensionStatus,
   NetworkUrls,
+  PermissionGrant,
+  PermissionGrantKind,
   PermissionRequest,
   Project,
   RemoteAccessStatus,
@@ -33,22 +35,40 @@ import type {
 type LoadState = "booting" | "ready" | "error";
 type MainView = "chat" | "extensions";
 type RailPanel = "provider" | "android" | "browser" | "mcp" | "context" | "activity" | "permissions" | "notifications" | "memory" | "skills";
+type AppTheme = "light" | "dark";
+type NativeCommandAction = "openSettings" | "openExtensions" | "openChat" | "increaseFont" | "decreaseFont" | "toggleTheme";
 type VoiceInputState = "idle" | "recording" | "transcribing";
 type VoiceSampleChunk = { start: number; end: number; samples: Float32Array };
+type TerminalTabState = {
+  session: TerminalSession;
+  events: TerminalOutputEvent[];
+  busy: boolean;
+  error: string;
+};
 
 const LEFT_COLLAPSED_KEY = "forgeagent.web.leftCollapsed";
 const LEFT_WIDTH_KEY = "forgeagent.web.leftWidth";
 const RIGHT_WIDTH_KEY = "forgeagent.web.rightWidth";
+const RIGHT_COLLAPSED_KEY = "forgeagent.web.rightCollapsed";
+const FONT_SCALE_KEY = "forgeagent.web.fontScale";
+const THEME_KEY = "forgeagent.web.theme";
 const LEFT_WIDTH_DEFAULT = 248;
 const RIGHT_WIDTH_DEFAULT = 304;
 const LEFT_WIDTH_MIN = 196;
 const LEFT_WIDTH_MAX = 340;
 const RIGHT_WIDTH_MIN = 240;
 const RIGHT_WIDTH_MAX = 420;
+const FONT_SCALE_MIN = 0.9;
+const FONT_SCALE_MAX = 1.16;
+const FONT_SCALE_STEP = 0.05;
 const VOICE_PREVIEW_INTERVAL_MS = 2_000;
 const VOICE_PREVIEW_WINDOW_SECONDS = 10;
 const VOICE_PREVIEW_MAX_BYTES = 8 * 1024 * 1024;
 const VOICE_WAV_SAMPLE_RATE = 16_000;
+const PRODUCT_NAME = "DeepSeek-Forge";
+const LEGACY_PRODUCT_NAME = "ForgeAgent";
+const TERMINAL_EVENT_LIMIT = 1000;
+const WORKSPACE_AUTOPILOT_GRANTS: PermissionGrantKind[] = ["workspace_edits", "safe_commands"];
 
 declare global {
   interface Window {
@@ -65,6 +85,35 @@ declare global {
 
 function maxSeq(events: SessionEvent[]): number {
   return events.reduce((max, event) => Math.max(max, event.seq), 0);
+}
+
+function productText(value: string | null | undefined, fallback = ""): string {
+  return (value ?? fallback).split(LEGACY_PRODUCT_NAME).join(PRODUCT_NAME);
+}
+
+function projectName(project: Project | null | undefined): string {
+  return productText(project?.name, "No project");
+}
+
+function projectPath(project: Project | null | undefined): string {
+  return productText(project?.path, "No workspace");
+}
+
+function sessionTitle(session: Session | null | undefined, fallback = "New conversation"): string {
+  return productText(session?.title, fallback);
+}
+
+function clampFontScale(value: number): number {
+  if (!Number.isFinite(value)) return 1;
+  return Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, Math.round(value * 100) / 100));
+}
+
+function storedFontScale(): number {
+  return clampFontScale(Number(localStorage.getItem(FONT_SCALE_KEY) ?? "1"));
+}
+
+function storedTheme(): AppTheme {
+  return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
 }
 
 function isUnreadTriggerEvent(event: SessionEvent): boolean {
@@ -86,9 +135,40 @@ function isWorkspaceActivityTriggerEvent(event: SessionEvent): boolean {
     event.type === "worktree_event";
 }
 
+function isWorkspaceAutopilotGrant(grant: PermissionGrant, sessionId: string, branchId: string): boolean {
+  return grant.sessionId === sessionId &&
+    WORKSPACE_AUTOPILOT_GRANTS.includes(grant.grantKind) &&
+    (
+      grant.scope === "session" ||
+      (grant.scope === "branch" && grant.branchId === branchId)
+    );
+}
+
 function mergeEvent(events: SessionEvent[], event: SessionEvent): SessionEvent[] {
   if (events.some((existing) => existing.seq === event.seq)) return events;
   return [...events, event].sort((a, b) => a.seq - b.seq);
+}
+
+function maxTerminalSeq(events: TerminalOutputEvent[]): number {
+  return events.reduce((max, event) => Math.max(max, event.seq), 0);
+}
+
+function mergeTerminalEvents(current: TerminalOutputEvent[], incoming: TerminalOutputEvent[]): TerminalOutputEvent[] {
+  if (incoming.length === 0) return current;
+  const seen = new Set(current.map((event) => event.seq));
+  const next = [...current];
+  for (const event of incoming) {
+    if (seen.has(event.seq)) continue;
+    next.push(event);
+    seen.add(event.seq);
+  }
+  next.sort((a, b) => a.seq - b.seq);
+  return next.slice(-TERMINAL_EVENT_LIMIT);
+}
+
+function terminalTabTitle(tab: TerminalTabState, index: number): string {
+  const shell = tab.session.shell.split("/").pop() || tab.session.shell || "shell";
+  return `Terminal ${index + 1} · ${shell}`;
 }
 
 function eventBranchId(event: SessionEvent): string {
@@ -244,6 +324,28 @@ function pickNativeWorkspace(kind: "open" | "create"): Promise<string | null> {
   });
 }
 
+function ComposerTooltip({
+  action,
+  label,
+  align,
+  children,
+}: {
+  action: string;
+  label: string;
+  align?: "left" | "right";
+  children: ReactNode;
+}) {
+  return (
+    <span
+      className={`composer-tooltip${align ? ` ${align}` : ""}`}
+      data-composer-action={action}
+      data-tooltip={label}
+    >
+      {children}
+    </span>
+  );
+}
+
 export function App() {
   const [loadState, setLoadState] = useState<LoadState>("booting");
   const [error, setError] = useState<string>("");
@@ -265,7 +367,11 @@ export function App() {
   const [extensionStatus, setExtensionStatus] = useState<ExtensionStatus | null>(null);
   const [extensionCandidates, setExtensionCandidates] = useState<ExtensionCandidate[]>([]);
   const [extensionsLoading, setExtensionsLoading] = useState(false);
+  const [fontScale, setFontScale] = useState(storedFontScale);
+  const [theme, setTheme] = useState<AppTheme>(storedTheme);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [pendingPermissions, setPendingPermissions] = useState<PermissionRequest[]>([]);
+  const [permissionGrants, setPermissionGrants] = useState<PermissionGrant[]>([]);
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<File[]>([]);
   const [voiceState, setVoiceState] = useState<VoiceInputState>("idle");
@@ -289,6 +395,7 @@ export function App() {
     RIGHT_WIDTH_MIN,
     RIGHT_WIDTH_MAX,
   ));
+  const [rightCollapsed, setRightCollapsed] = useState(() => localStorage.getItem(RIGHT_COLLAPSED_KEY) === "1");
   const [railPanel, setRailPanel] = useState<RailPanel | null>(null);
   const [busy, setBusy] = useState(false);
   const [dangerBusy, setDangerBusy] = useState(false);
@@ -297,10 +404,10 @@ export function App() {
   const [autopilotBusy, setAutopilotBusy] = useState(false);
   const [projectBusy, setProjectBusy] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
-  const [terminalBusy, setTerminalBusy] = useState(false);
-  const [terminalSession, setTerminalSession] = useState<TerminalSession | null>(null);
-  const [terminalEvents, setTerminalEvents] = useState<TerminalOutputEvent[]>([]);
-  const [terminalError, setTerminalError] = useState("");
+  const [terminalCreating, setTerminalCreating] = useState(false);
+  const [terminalTabs, setTerminalTabs] = useState<TerminalTabState[]>([]);
+  const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
+  const [terminalGlobalError, setTerminalGlobalError] = useState("");
   const selectedIdRef = useRef("");
   const selectedProjectIdRef = useRef("");
   const selectedBranchIdRef = useRef("main");
@@ -333,7 +440,8 @@ export function App() {
   const terminalScrollRef = useRef<HTMLDivElement | null>(null);
   const terminalPaneRef = useRef<HTMLDivElement | null>(null);
   const terminalSourceRef = useRef<EventSource | null>(null);
-  const terminalSeqRef = useRef(0);
+  const terminalTabsRef = useRef<TerminalTabState[]>([]);
+  const activeTerminalIdRef = useRef<string | null>(null);
 
   const selected = useMemo(
     () => sessions.find((session) => session.id === selectedId) ?? null,
@@ -343,6 +451,11 @@ export function App() {
     () => projects.find((project) => project.id === selectedProjectId) ?? projects.find((project) => project.status !== "archived") ?? null,
     [projects, selectedProjectId],
   );
+  const activeTerminalIndex = useMemo(
+    () => terminalTabs.findIndex((tab) => tab.session.id === activeTerminalId),
+    [activeTerminalId, terminalTabs],
+  );
+  const activeTerminal = activeTerminalIndex >= 0 ? terminalTabs[activeTerminalIndex] : null;
   const renderThread = useMemo(
     () => buildRenderEvents(thread),
     [thread],
@@ -357,6 +470,16 @@ export function App() {
     }
     return buildWorkspaceActivityFromThread(thread, selected?.id ?? "", selectedBranchId);
   }, [selected?.id, selectedBranchId, thread, workspaceActivity]);
+  const workspaceAutopilotGrants = useMemo(
+    () => selected
+      ? permissionGrants.filter((grant) => isWorkspaceAutopilotGrant(grant, selected.id, selectedBranchId))
+      : [],
+    [permissionGrants, selected, selectedBranchId],
+  );
+  const workspaceAutopilotActive = useMemo(() => {
+    const activeKinds = new Set(workspaceAutopilotGrants.map((grant) => grant.grantKind));
+    return WORKSPACE_AUTOPILOT_GRANTS.every((grantKind) => activeKinds.has(grantKind));
+  }, [workspaceAutopilotGrants]);
   const deletableSessions = useMemo(
     () => sessions.filter((session) => (
       (!selectedProjectId || session.projectId === selectedProjectId) &&
@@ -378,10 +501,51 @@ export function App() {
       ? "Transcribing voice input"
       : "Start voice input";
   const voiceDisabled = busy || selected?.status === "running" || voiceState === "transcribing";
+  const sessionRunning = selected?.status === "running";
+  const composerLocked = busy || sessionRunning;
+  const sendDisabled = composerLocked || voiceState !== "idle" || (!draft.trim() && attachments.length === 0);
+  const attachTooltip = composerLocked
+    ? "Wait for the current run to finish before attaching files."
+    : "Attach local files to this message before sending.";
+  const dangerTooltip = !selected
+    ? "Select a session before changing approval bypass."
+    : selected.dangerouslyAllowAllTools
+      ? "Turn approval prompts back on for this session."
+      : "Bypass approval prompts for this session after confirmation.";
+  const autopilotTooltip = !selected
+    ? "Select a session before changing workspace autopilot."
+    : sessionRunning
+      ? "Wait for the current run to finish before changing workspace autopilot."
+      : workspaceAutopilotActive
+        ? "Turn off automatic approval for workspace edits and safe checks."
+        : "Grant workspace edits and safe command checks for this session.";
+  const reviewTooltip = selected
+    ? "Open the work review panel with changes, checks, diagnostics, and tasks."
+    : "Select a session to review its work state.";
+  const voiceTooltip = voiceState === "recording"
+    ? "Stop recording and transcribe voice input into the composer."
+    : voiceState === "transcribing"
+      ? "Voice input is being transcribed into the composer."
+      : composerLocked
+        ? "Wait for the current run to finish before recording voice input."
+        : "Record voice input and transcribe it into the composer.";
+  const sendTooltip = busy
+    ? "DeepSeek-Forge is already sending or processing a request."
+    : sessionRunning
+      ? "Wait for the current run to finish before sending another message."
+      : voiceState !== "idle"
+        ? "Finish voice input before sending."
+        : (!draft.trim() && attachments.length === 0)
+          ? "Type a message or attach a file before sending."
+          : "Send the current message and attachments to DeepSeek-Forge.";
 
   useEffect(() => {
     localStorage.setItem(LEFT_COLLAPSED_KEY, leftCollapsed ? "1" : "0");
   }, [leftCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem(RIGHT_COLLAPSED_KEY, rightCollapsed ? "1" : "0");
+  }, [rightCollapsed]);
 
   useEffect(() => {
     const media = window.matchMedia?.("(max-width: 760px)");
@@ -399,6 +563,14 @@ export function App() {
   useEffect(() => {
     threadRef.current = thread;
   }, [thread]);
+
+  useEffect(() => {
+    terminalTabsRef.current = terminalTabs;
+  }, [terminalTabs]);
+
+  useEffect(() => {
+    activeTerminalIdRef.current = activeTerminalId;
+  }, [activeTerminalId]);
 
   useEffect(() => {
     sessionsRef.current = sessions;
@@ -584,6 +756,7 @@ export function App() {
       setSelectedBranchId("main");
       setWorkspaceActivity(null);
       setUsage(null);
+      setPermissionGrants([]);
       stickToBottomRef.current = true;
       return;
     }
@@ -595,10 +768,11 @@ export function App() {
       session?.activeBranchId ||
       "main";
     const initialTargetSeq = session?.latestSeq ?? 0;
-    let [events, usageNext, activityNext] = await Promise.all([
+    let [events, usageNext, activityNext, permissionGrantsNext] = await Promise.all([
       fetchThreadEventsUntil(sessionId, branchId, 0, initialTargetSeq),
       api.usage(sessionId).catch(() => null),
       api.activity(sessionId, branchId).catch(() => null),
+      api.permissionGrants(sessionId).catch(() => []),
     ]);
     const latestTargetSeq = Math.max(
       initialTargetSeq,
@@ -615,6 +789,7 @@ export function App() {
     setThread(events);
     setWorkspaceActivity(activityNext ?? buildWorkspaceActivityFromThread(events, sessionId, branchId));
     setUsage(usageNext);
+    setPermissionGrants(permissionGrantsNext);
     stickToBottomRef.current = true;
     cursorRef.current = Math.max(cursorRef.current, maxSeq(events));
     markSessionRead(sessionId, maxSeq(events));
@@ -665,6 +840,9 @@ export function App() {
           ));
         });
     }
+    if (events.some((event) => event.type === "permission_grant_event")) {
+      void api.permissionGrants(selectedSessionId).then(setPermissionGrants).catch(() => undefined);
+    }
     if (stickToBottomRef.current) {
       markSessionRead(selectedSessionId, maxSeq(mergedThread));
     }
@@ -677,6 +855,8 @@ export function App() {
       const urlParams = new URLSearchParams(window.location.search);
       const urlPairingCode = urlParams.get("pairCode") ?? "";
       const requestedRail = parseRailPanel(urlParams.get("rail"));
+      const requestedView = urlParams.get("view") ?? "";
+      const requestedSettings = urlParams.get("settings") === "1";
       if (urlPairingCode) {
         await pairWithCode(urlPairingCode);
         urlParams.delete("pairCode");
@@ -705,11 +885,23 @@ export function App() {
         urlParams.delete("selectSessionId");
       }
       if (requestedRail) {
+        setRightCollapsed(false);
         setRailPanel(requestedRail);
         urlParams.delete("rail");
       }
+      if (requestedView === "extensions") {
+        setMainView("extensions");
+        urlParams.delete("view");
+      } else if (requestedView === "chat") {
+        setMainView("chat");
+        urlParams.delete("view");
+      }
+      if (requestedSettings) {
+        setSettingsOpen(true);
+        urlParams.delete("settings");
+      }
       const nextQuery = urlParams.toString();
-      if (requestedSessionId || requestedRail) {
+      if (requestedSessionId || requestedRail || requestedView || requestedSettings) {
         window.history.replaceState({}, "", `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`);
       }
       setLoadState("ready");
@@ -765,6 +957,9 @@ export function App() {
                       currentBranchId,
                     ));
                   });
+              }
+              if (data.event.type === "permission_grant_event") {
+                void api.permissionGrants(data.sessionId).then(setPermissionGrants).catch(() => undefined);
               }
               if (stickToBottomRef.current) {
                 markSessionRead(data.sessionId, data.event.seq);
@@ -853,6 +1048,58 @@ export function App() {
     };
   }, [mainView, reloadExtensions]);
 
+  useEffect(() => {
+    localStorage.setItem(FONT_SCALE_KEY, fontScale.toFixed(2));
+  }, [fontScale]);
+
+  useEffect(() => {
+    localStorage.setItem(THEME_KEY, theme);
+    document.documentElement.dataset.forgeTheme = theme;
+  }, [theme]);
+
+  useEffect(() => {
+    function applyNativeCommand(action: string | null | undefined) {
+      switch (action as NativeCommandAction | undefined) {
+        case "openSettings":
+          setSettingsOpen(true);
+          break;
+        case "openExtensions":
+          setMainView("extensions");
+          break;
+        case "openChat":
+          setMainView("chat");
+          break;
+        case "increaseFont":
+          setFontScale((value) => clampFontScale(value + FONT_SCALE_STEP));
+          break;
+        case "decreaseFont":
+          setFontScale((value) => clampFontScale(value - FONT_SCALE_STEP));
+          break;
+        case "toggleTheme":
+          setTheme((value) => value === "dark" ? "light" : "dark");
+          break;
+      }
+    }
+
+    function handleNativeCommand(event: Event) {
+      const detail = (event as CustomEvent<{ action?: string }>).detail;
+      applyNativeCommand(detail?.action);
+    }
+
+    function handleNativeAppearance(event: Event) {
+      const detail = (event as CustomEvent<{ fontScale?: number; theme?: string }>).detail;
+      if (detail?.fontScale !== undefined) setFontScale(clampFontScale(detail.fontScale));
+      if (detail?.theme === "dark" || detail?.theme === "light") setTheme(detail.theme);
+    }
+
+    window.addEventListener("forge-native-command", handleNativeCommand);
+    window.addEventListener("forge-native-appearance", handleNativeAppearance);
+    return () => {
+      window.removeEventListener("forge-native-command", handleNativeCommand);
+      window.removeEventListener("forge-native-appearance", handleNativeAppearance);
+    };
+  }, []);
+
   useLayoutEffect(() => {
     const textarea = draftRef.current;
     if (!textarea) return;
@@ -877,7 +1124,7 @@ export function App() {
       const scroll = terminalScrollRef.current;
       if (scroll) scroll.scrollTop = scroll.scrollHeight;
     });
-  }, [terminalEvents, terminalOpen]);
+  }, [activeTerminal?.events, terminalOpen]);
 
   function stopVoiceStream() {
     if (voicePreviewTimerRef.current !== undefined) {
@@ -1094,16 +1341,16 @@ export function App() {
         finalText = [
           text || "Please use the uploaded file(s).",
           "",
-          "Uploaded files available to ForgeAgent:",
+          "Uploaded files available to DeepSeek-Forge:",
           ...lines,
           "",
           "Use the file paths above when reading or processing these uploads.",
         ].join("\n");
       }
-      setDraft("");
-      setAttachments([]);
       const branchId = selectedBranchIdRef.current || "main";
       await api.sendMessage(sessionId, finalText, branchId);
+      setDraft("");
+      setAttachments([]);
       await reloadSessions(sessionId);
       await loadThread(sessionId, branchId);
     } catch (err) {
@@ -1402,29 +1649,42 @@ export function App() {
     }
   }
 
-  async function enableWorkspaceAutopilot() {
+  async function toggleWorkspaceAutopilot() {
     if (!selected) {
-      setError("Select a session before enabling workspace autopilot.");
+      setError("Select a session before changing workspace autopilot.");
       return;
     }
     setAutopilotBusy(true);
     setDangerNotice("");
     setError("");
     try {
-      await api.createPermissionGrant({
-        sessionId: selected.id,
-        grantKind: "workspace_edits",
-        scope: "session",
-        branchId: selectedBranchId,
-      });
-      await api.createPermissionGrant({
-        sessionId: selected.id,
-        grantKind: "safe_commands",
-        scope: "session",
-        branchId: selectedBranchId,
-      });
+      const current = await api.permissionGrants(selected.id);
+      const currentAutopilotGrants = current.filter((grant) =>
+        isWorkspaceAutopilotGrant(grant, selected.id, selectedBranchId)
+      );
+      const currentKinds = new Set(currentAutopilotGrants.map((grant) => grant.grantKind));
+      const isActive = WORKSPACE_AUTOPILOT_GRANTS.every((grantKind) => currentKinds.has(grantKind));
+
+      if (isActive) {
+        await Promise.all(currentAutopilotGrants.map((grant) =>
+          api.revokePermissionGrant(grant.grantId)
+        ));
+        setDangerNotice("Workspace autopilot is off. Workspace edits and safe checks will ask for approval again.");
+      } else {
+        const missingKinds = WORKSPACE_AUTOPILOT_GRANTS.filter((grantKind) => !currentKinds.has(grantKind));
+        await Promise.all(missingKinds.map((grantKind) =>
+          api.createPermissionGrant({
+            sessionId: selected.id,
+            grantKind,
+            scope: "session",
+            branchId: selectedBranchId,
+          })
+        ));
+        setDangerNotice("Workspace autopilot is on for edits and safe checks.");
+      }
+
+      setPermissionGrants(await api.permissionGrants(selected.id));
       await loadThread(selected.id, selectedBranchId);
-      setDangerNotice("Workspace autopilot is on for edits and safe checks.");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1432,59 +1692,163 @@ export function App() {
     }
   }
 
-  function appendTerminalEvents(events: TerminalOutputEvent[]) {
-    if (events.length === 0) return;
-    terminalSeqRef.current = events.reduce((max, event) => Math.max(max, event.seq), terminalSeqRef.current);
-    setTerminalEvents((current) => {
-      const seen = new Set(current.map((event) => event.seq));
-      const next = [...current];
-      for (const event of events) {
-        if (!seen.has(event.seq)) next.push(event);
-      }
-      next.sort((a, b) => a.seq - b.seq);
-      return next.slice(-1000);
+  function setActiveTerminal(terminalId: string | null) {
+    activeTerminalIdRef.current = terminalId;
+    setActiveTerminalId(terminalId);
+  }
+
+  function updateTerminalTabs(updater: (current: TerminalTabState[]) => TerminalTabState[]) {
+    setTerminalTabs((current) => {
+      const next = updater(current);
+      terminalTabsRef.current = next;
+      return next;
     });
+  }
+
+  function upsertTerminalSnapshot(
+    snapshot: TerminalSession,
+    options: Partial<Pick<TerminalTabState, "busy" | "error">> = {},
+  ) {
+    updateTerminalTabs((current) => {
+      const index = current.findIndex((tab) => tab.session.id === snapshot.id);
+      if (index === -1) {
+        return [
+          ...current,
+          {
+            session: snapshot,
+            events: snapshot.events.slice(-TERMINAL_EVENT_LIMIT),
+            busy: options.busy ?? false,
+            error: options.error ?? "",
+          },
+        ];
+      }
+      return current.map((tab, itemIndex) => {
+        if (itemIndex !== index) return tab;
+        return {
+          ...tab,
+          session: snapshot,
+          events: mergeTerminalEvents(tab.events, snapshot.events),
+          busy: options.busy ?? tab.busy,
+          error: options.error ?? tab.error,
+        };
+      });
+    });
+  }
+
+  function setTerminalTabBusy(terminalId: string, busyValue: boolean) {
+    updateTerminalTabs((current) => current.map((tab) => (
+      tab.session.id === terminalId ? { ...tab, busy: busyValue } : tab
+    )));
+  }
+
+  function setTerminalTabError(terminalId: string, errorValue: string) {
+    updateTerminalTabs((current) => current.map((tab) => (
+      tab.session.id === terminalId ? { ...tab, error: errorValue } : tab
+    )));
+  }
+
+  function appendTerminalEvents(terminalId: string, events: TerminalOutputEvent[]) {
+    if (events.length === 0) return;
+    updateTerminalTabs((current) => current.map((tab) => (
+      tab.session.id === terminalId
+        ? { ...tab, events: mergeTerminalEvents(tab.events, events) }
+        : tab
+    )));
   }
 
   async function attachTerminalStream(terminalId: string) {
     terminalSourceRef.current?.close();
     terminalSourceRef.current = null;
+    const tab = terminalTabsRef.current.find((item) => item.session.id === terminalId);
+    const afterSeq = tab ? maxTerminalSeq(tab.events) : 0;
     const issued = await api.streamToken();
     const source = new EventSource(
-      `/terminal/sessions/${terminalId}/events?afterSeq=${terminalSeqRef.current}&stream_token=${encodeURIComponent(issued.code)}`,
+      `/terminal/sessions/${terminalId}/events?afterSeq=${afterSeq}&stream_token=${encodeURIComponent(issued.code)}`,
     );
     source.addEventListener("terminal_output", (event) => {
       try {
-        appendTerminalEvents([JSON.parse((event as MessageEvent).data) as TerminalOutputEvent]);
+        appendTerminalEvents(terminalId, [JSON.parse((event as MessageEvent).data) as TerminalOutputEvent]);
       } catch {
-        setTerminalError("Could not parse terminal output.");
+        setTerminalTabError(terminalId, "Could not parse terminal output.");
       }
     });
     source.onerror = () => {
-      setTerminalError("Terminal stream disconnected. Output will resume when the panel reconnects.");
+      setTerminalTabError(terminalId, "Terminal stream disconnected. Output will resume when this tab reconnects.");
     };
     terminalSourceRef.current = source;
   }
 
-  async function openTerminal() {
+  async function activateTerminalTab(terminalId: string) {
     setTerminalOpen(true);
-    setTerminalBusy(true);
-    setTerminalError("");
+    setTerminalGlobalError("");
+    setActiveTerminal(terminalId);
+    setTerminalTabError(terminalId, "");
     try {
-      let snapshot = terminalSession;
-      if (!snapshot) {
-        snapshot = await api.createTerminalSession(terminalLaunchInput(selectedProjectIdRef.current));
-      }
-      setTerminalSession(snapshot);
-      terminalSeqRef.current = 0;
-      setTerminalEvents(snapshot.events);
-      appendTerminalEvents(snapshot.events);
+      const tab = terminalTabsRef.current.find((item) => item.session.id === terminalId);
+      const snapshot = await api.terminalSnapshot(terminalId, tab ? maxTerminalSeq(tab.events) : 0);
+      upsertTerminalSnapshot(snapshot, { error: "" });
+      await attachTerminalStream(terminalId);
+      window.requestAnimationFrame(() => terminalPaneRef.current?.focus());
+    } catch (err) {
+      setTerminalTabError(terminalId, terminalErrorMessage(err));
+    }
+  }
+
+  async function createTerminalTab() {
+    setTerminalOpen(true);
+    setTerminalCreating(true);
+    setTerminalGlobalError("");
+    try {
+      const snapshot = await api.createTerminalSession(terminalLaunchInput(selectedProjectIdRef.current));
+      upsertTerminalSnapshot(snapshot, { busy: false, error: "" });
+      setActiveTerminal(snapshot.id);
       await attachTerminalStream(snapshot.id);
       window.requestAnimationFrame(() => terminalPaneRef.current?.focus());
     } catch (err) {
-      setTerminalError(terminalErrorMessage(err));
+      setTerminalGlobalError(terminalErrorMessage(err));
     } finally {
-      setTerminalBusy(false);
+      setTerminalCreating(false);
+    }
+  }
+
+  async function openTerminal() {
+    setTerminalOpen(true);
+    setTerminalGlobalError("");
+    const currentTabs = terminalTabsRef.current;
+    const preferredId = activeTerminalIdRef.current && currentTabs.some((tab) => tab.session.id === activeTerminalIdRef.current)
+      ? activeTerminalIdRef.current
+      : currentTabs[0]?.session.id;
+    if (preferredId) {
+      await activateTerminalTab(preferredId);
+      return;
+    }
+
+    setTerminalCreating(true);
+    try {
+      const sessions = await api.terminalSessions();
+      if (sessions.length > 0) {
+        const tabs = sessions.map((session) => ({
+          session,
+          events: session.events.slice(-TERMINAL_EVENT_LIMIT),
+          busy: false,
+          error: "",
+        }));
+        updateTerminalTabs(() => tabs);
+        const nextId = sessions[0]!.id;
+        setActiveTerminal(nextId);
+        await attachTerminalStream(nextId);
+        window.requestAnimationFrame(() => terminalPaneRef.current?.focus());
+      } else {
+        const snapshot = await api.createTerminalSession(terminalLaunchInput(selectedProjectIdRef.current));
+        upsertTerminalSnapshot(snapshot, { busy: false, error: "" });
+        setActiveTerminal(snapshot.id);
+        await attachTerminalStream(snapshot.id);
+        window.requestAnimationFrame(() => terminalPaneRef.current?.focus());
+      }
+    } catch (err) {
+      setTerminalGlobalError(terminalErrorMessage(err));
+    } finally {
+      setTerminalCreating(false);
     }
   }
 
@@ -1494,57 +1858,84 @@ export function App() {
     terminalSourceRef.current = null;
   }
 
-  async function sendTerminalData(data: string) {
-    if (!terminalSession || !data) return;
-    setTerminalError("");
+  async function closeTerminalTab(terminalId: string) {
+    const current = terminalTabsRef.current;
+    const closingIndex = current.findIndex((tab) => tab.session.id === terminalId);
     try {
-      const snapshot = await api.writeTerminalInput(terminalSession.id, data);
-      setTerminalSession(snapshot);
-      appendTerminalEvents(snapshot.events);
+      await api.deleteTerminal(terminalId);
+    } catch {
+      // The tab may already have exited or been removed by the backend.
+    }
+    const nextTabs = terminalTabsRef.current.filter((tab) => tab.session.id !== terminalId);
+    updateTerminalTabs(() => nextTabs);
+    if (activeTerminalIdRef.current !== terminalId) return;
+    terminalSourceRef.current?.close();
+    terminalSourceRef.current = null;
+    const nextActive = nextTabs[Math.max(0, Math.min(closingIndex, nextTabs.length - 1))]?.session.id ?? null;
+    setActiveTerminal(nextActive);
+    if (nextActive) {
+      await activateTerminalTab(nextActive);
+    } else {
+      setTerminalOpen(false);
+    }
+  }
+
+  async function sendTerminalData(data: string) {
+    const terminalId = activeTerminalIdRef.current;
+    if (!terminalId || !data) return;
+    setTerminalTabError(terminalId, "");
+    try {
+      const snapshot = await api.writeTerminalInput(terminalId, data);
+      upsertTerminalSnapshot(snapshot, { error: "" });
     } catch (err) {
-      setTerminalError(terminalErrorMessage(err));
+      setTerminalTabError(terminalId, terminalErrorMessage(err));
     }
   }
 
   async function stopTerminal() {
-    if (!terminalSession) return;
-    setTerminalError("");
+    const terminalId = activeTerminalIdRef.current;
+    if (!terminalId) return;
+    setTerminalTabError(terminalId, "");
     try {
-      await api.stopTerminal(terminalSession.id);
-      const snapshot = await api.terminalSnapshot(terminalSession.id);
-      setTerminalSession(snapshot);
-      appendTerminalEvents(snapshot.events);
+      await api.stopTerminal(terminalId);
+      const snapshot = await api.terminalSnapshot(terminalId);
+      upsertTerminalSnapshot(snapshot, { error: "" });
     } catch (err) {
-      setTerminalError(terminalErrorMessage(err));
+      setTerminalTabError(terminalId, terminalErrorMessage(err));
     }
   }
 
   async function restartTerminal() {
-    setTerminalBusy(true);
-    setTerminalError("");
+    const terminalId = activeTerminalIdRef.current;
+    const replaceIndex = terminalTabsRef.current.findIndex((tab) => tab.session.id === terminalId);
+    if (!terminalId || replaceIndex < 0) {
+      await createTerminalTab();
+      return;
+    }
+    setTerminalTabBusy(terminalId, true);
+    setTerminalTabError(terminalId, "");
     try {
-      if (terminalSession) {
-        try {
-          await api.deleteTerminal(terminalSession.id);
-        } catch {
-          // Starting a fresh terminal is still useful if deletion races with process exit.
-        }
+      try {
+        await api.deleteTerminal(terminalId);
+      } catch {
+        // Starting a fresh terminal is still useful if deletion races with process exit.
       }
       terminalSourceRef.current?.close();
       terminalSourceRef.current = null;
-      terminalSeqRef.current = 0;
-      setTerminalSession(null);
-      setTerminalEvents([]);
       const snapshot = await api.createTerminalSession(terminalLaunchInput(selectedProjectIdRef.current));
-      setTerminalSession(snapshot);
-      setTerminalEvents(snapshot.events);
-      appendTerminalEvents(snapshot.events);
+      updateTerminalTabs((current) => {
+        const withoutOld = current.filter((tab) => tab.session.id !== terminalId);
+        const nextTab = { session: snapshot, events: snapshot.events.slice(-TERMINAL_EVENT_LIMIT), busy: false, error: "" };
+        const insertAt = Math.max(0, Math.min(replaceIndex, withoutOld.length));
+        return [...withoutOld.slice(0, insertAt), nextTab, ...withoutOld.slice(insertAt)];
+      });
+      setActiveTerminal(snapshot.id);
       await attachTerminalStream(snapshot.id);
       window.requestAnimationFrame(() => terminalPaneRef.current?.focus());
     } catch (err) {
-      setTerminalError(terminalErrorMessage(err));
+      setTerminalTabError(terminalId, terminalErrorMessage(err));
     } finally {
-      setTerminalBusy(false);
+      setTerminalTabBusy(terminalId, false);
     }
   }
 
@@ -1594,7 +1985,7 @@ export function App() {
   }
 
   if (loadState === "booting") {
-    return <div className="boot">Opening ForgeAgent…</div>;
+    return <div className="boot">Opening DeepSeek-Forge…</div>;
   }
 
   if (loadState === "error") {
@@ -1602,7 +1993,7 @@ export function App() {
     return (
       <div className="boot boot-error">
         <div className="remote-pair-card">
-          <h1>ForgeAgent</h1>
+          <h1>DeepSeek-Forge</h1>
           {unauthorized ? (
             <>
               <p>
@@ -1646,19 +2037,38 @@ export function App() {
       .filter((event): event is Extract<SessionEvent, { type: "permission_response" }> => event.type === "permission_response")
       .map((event) => event.permissionRequestId),
   );
+  function selectRailPanel(panel: RailPanel) {
+    if (rightCollapsed) {
+      setRightCollapsed(false);
+      setRailPanel(panel);
+      return;
+    }
+    setRailPanel((current) => current === panel ? null : panel);
+  }
+
+  function openRailPanel(panel: RailPanel) {
+    if (rightCollapsed) setRightCollapsed(false);
+    setRailPanel(panel);
+  }
+
+  function adjustFontScale(delta: number) {
+    setFontScale((value) => clampFontScale(value + delta));
+  }
+
   const shellStyle = {
     "--left-width": `${leftWidth}px`,
     "--right-width": `${rightWidth}px`,
+    "--app-font-scale": fontScale.toFixed(2),
   } as CSSProperties;
 
   return (
     <main
-      className={`app-shell ${leftCollapsed ? "sidebar-collapsed" : ""} ${railPanel ? "rail-open" : ""}`}
+      className={`app-shell theme-${theme} ${mainView === "extensions" ? "extensions-mode" : ""} ${leftCollapsed ? "sidebar-collapsed" : ""} ${rightCollapsed ? "inspector-collapsed" : ""} ${railPanel && !rightCollapsed ? "rail-open" : ""}`}
       style={shellStyle}
     >
       <aside className={`sidebar ${leftCollapsed ? "collapsed" : ""}`}>
         <div className="brand-row">
-          {!leftCollapsed ? <div className="brand">ForgeAgent</div> : <div className="brand-mark">F</div>}
+          {!leftCollapsed ? <div className="brand">DeepSeek-Forge</div> : <div className="brand-mark">D</div>}
           <div className="brand-actions">
             <button
               className="new-session icon-button"
@@ -1698,13 +2108,13 @@ export function App() {
                 >
                   {projects.map((project) => (
                     <option key={project.id} value={project.id}>
-                      {project.name}
+                      {productText(project.name)}
                     </option>
                   ))}
                 </select>
               </label>
-              <div className="project-path" title={selectedProject?.path ?? ""}>
-                {selectedProject?.path ?? "No workspace"}
+              <div className="project-path" title={projectPath(selectedProject)}>
+                {projectPath(selectedProject)}
               </div>
               <div className="project-actions">
                 <button type="button" onClick={() => void createWorkspaceProject("open")} disabled={projectBusy}>
@@ -1740,12 +2150,12 @@ export function App() {
               <button
                 className="session-select"
                 onClick={() => void selectSession(session.id)}
-                title={session.title}
+                title={sessionTitle(session)}
               >
                 <SessionStateIndicator session={session} />
                 {!leftCollapsed ? (
                   <>
-                    <span className="session-title">{session.title}</span>
+                    <span className="session-title">{sessionTitle(session)}</span>
                     <span className="session-time">{formatTime(session.updatedAt)}</span>
                   </>
                 ) : null}
@@ -1753,7 +2163,7 @@ export function App() {
               {!leftCollapsed ? (
                 <button
                   className="session-delete"
-                  aria-label={`Delete ${session.title}`}
+                  aria-label={`Delete ${sessionTitle(session)}`}
                   title={session.status === "running" ? "Interrupt before deleting" : "Delete session"}
                   disabled={busy || session.status === "running"}
                   onClick={(event) => void deleteSession(session, event)}
@@ -1764,11 +2174,64 @@ export function App() {
             </div>
           ))}
         </div>
+        <div className={`sidebar-bottom-panels ${leftCollapsed ? "collapsed" : ""}`}>
+          <div className="sidebar-control-panel" aria-label="Appearance controls">
+            <button
+              type="button"
+              onClick={() => adjustFontScale(-FONT_SCALE_STEP)}
+              disabled={fontScale <= FONT_SCALE_MIN}
+              aria-label="Decrease font size"
+              title="Decrease font size"
+            >
+              A-
+            </button>
+            <button
+              type="button"
+              onClick={() => adjustFontScale(FONT_SCALE_STEP)}
+              disabled={fontScale >= FONT_SCALE_MAX}
+              aria-label="Increase font size"
+              title="Increase font size"
+            >
+              A+
+            </button>
+            <button
+              type="button"
+              onClick={() => setTheme((value) => value === "dark" ? "light" : "dark")}
+              aria-label={theme === "dark" ? "Switch to day mode" : "Switch to night mode"}
+              title={theme === "dark" ? "Switch to day mode" : "Switch to night mode"}
+            >
+              {theme === "dark" ? "☀" : "☾"}
+            </button>
+          </div>
+          <button
+            type="button"
+            className="sidebar-settings-button"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Open settings"
+            title="Settings"
+          >
+            <span aria-hidden="true">⚙</span>
+            {!leftCollapsed ? (
+              <span className="sidebar-settings-copy">
+                <strong>Settings</strong>
+                <small>{setup?.provider.configured ? setup.provider.model : "Provider required"}</small>
+              </span>
+            ) : null}
+          </button>
+        </div>
         {!leftCollapsed ? <div className="sidebar-footer">
           <span className="avatar">L</span>
-          <span>{selectedProject?.name ?? "No project"}</span>
+          <span>{projectName(selectedProject)}</span>
         </div> : null}
       </aside>
+      {settingsOpen && setup ? (
+        <SettingsDialog
+          setup={setup}
+          onSaved={setSetup}
+          onError={setError}
+          onClose={() => setSettingsOpen(false)}
+        />
+      ) : null}
       {!leftCollapsed ? (
         <button
           type="button"
@@ -1779,6 +2242,15 @@ export function App() {
       ) : null}
       <button
         type="button"
+        className="mobile-sidebar-toggle"
+        aria-label="Open session sidebar"
+        aria-expanded={!leftCollapsed}
+        onClick={() => setLeftCollapsed(false)}
+      >
+        ☰
+      </button>
+      <button
+        type="button"
         className="column-resize left-column-resize"
         aria-label="Resize sessions column"
         title="Resize sessions column"
@@ -1787,13 +2259,14 @@ export function App() {
 
       <section className="reader">
         {mainView === "extensions" ? (
-          <ExtensionsCenter
+          <ExtensionsWorkbench
             status={extensionStatus}
             candidates={extensionCandidates}
             loading={extensionsLoading}
             onCandidates={setExtensionCandidates}
             onReload={reloadExtensions}
             onError={setError}
+            error={error}
             onOpenChat={() => setMainView("chat")}
           />
         ) : (
@@ -1802,10 +2275,10 @@ export function App() {
           <div className="session-strip-main">
             <SessionStateIndicator session={selected} />
             <div>
-              <strong>{selected?.title ?? "New conversation"}</strong>
+              <strong>{sessionTitle(selected)}</strong>
               <span>
                 {selected ? `${selected.status} · ${formatTime(selected.updatedAt)}` : "No session selected"}
-                {selectedProject ? ` · ${selectedProject.name}` : ""}
+                {selectedProject ? ` · ${projectName(selectedProject)}` : ""}
                 {usage?.contextUsedPercent !== undefined ? ` · ctx ${usage.contextUsedPercent.toFixed(0)}%` : ""}
               </span>
             </div>
@@ -1833,7 +2306,7 @@ export function App() {
             <ProviderSetup setup={setup} onSaved={setSetup} onError={setError} />
           ) : null}
 
-          <WorkReviewBanner activity={activity} onOpen={() => setRailPanel("activity")} />
+          <WorkReviewBanner activity={activity} onOpen={() => openRailPanel("activity")} />
 
           <div className="thread">
             {renderThread.length === 0 ? (
@@ -1865,60 +2338,70 @@ export function App() {
 
         <footer className="composer">
           <div className="composer-toolbar">
-            <button
-              type="button"
-              className={`composer-tool-button ${busy || selected?.status === "running" ? "disabled" : ""}`}
-              title="Upload files for this session"
-              aria-disabled={busy || selected?.status === "running"}
-              disabled={busy || selected?.status === "running"}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              Attach
-            </button>
+            <ComposerTooltip action="attach" label={attachTooltip} align="left">
+              <button
+                type="button"
+                className={`composer-tool-button ${composerLocked ? "disabled" : ""}`}
+                aria-disabled={composerLocked}
+                disabled={composerLocked}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Attach
+              </button>
+            </ComposerTooltip>
             <input
               ref={fileInputRef}
               className="file-input"
               type="file"
               multiple
-              disabled={busy || selected?.status === "running"}
+              disabled={composerLocked}
               onChange={(event) => {
                 const next = Array.from(event.currentTarget.files ?? []);
                 setAttachments((current) => [...current, ...next]);
                 event.currentTarget.value = "";
               }}
             />
-            <button
-              type="button"
-              className={`danger-mode-button ${selected?.dangerouslyAllowAllTools ? "active" : ""}`}
-              onClick={() => void toggleDangerousMode()}
-              disabled={!selected || dangerBusy}
-              title="Bypass approval prompts for this session"
-            >
-              {dangerBusy ? "Updating…" : selected?.dangerouslyAllowAllTools ? "Danger free: on" : "Danger free"}
-            </button>
-            <button
-              type="button"
-              className="composer-tool-button"
-              onClick={() => void enableWorkspaceAutopilot()}
-              disabled={!selected || autopilotBusy || selected?.status === "running"}
-              title="Allow workspace edits and safe check commands for this session"
-            >
-              {autopilotBusy ? "Enabling…" : "Autopilot"}
-            </button>
-            <button
-              type="button"
-              className="composer-tool-button"
-              onClick={() => setRailPanel("activity")}
-              disabled={!selected}
-              title="Review plans, changes, diagnostics, checks, tasks, and worktree state"
-            >
-              Review work
-            </button>
+            <ComposerTooltip action="danger-free" label={dangerTooltip}>
+              <button
+                type="button"
+                className={`danger-mode-button ${selected?.dangerouslyAllowAllTools ? "active" : ""}`}
+                onClick={() => void toggleDangerousMode()}
+                disabled={!selected || dangerBusy}
+              >
+                {dangerBusy ? "Updating…" : selected?.dangerouslyAllowAllTools ? "Danger free: on" : "Danger free"}
+              </button>
+            </ComposerTooltip>
+            <ComposerTooltip action="autopilot" label={autopilotTooltip}>
+              <button
+                type="button"
+                className={`composer-tool-button ${workspaceAutopilotActive ? "active" : ""}`}
+                onClick={() => void toggleWorkspaceAutopilot()}
+                disabled={!selected || autopilotBusy || sessionRunning}
+              >
+                {autopilotBusy
+                  ? workspaceAutopilotActive ? "Disabling…" : "Enabling…"
+                  : workspaceAutopilotActive ? "Autopilot: on" : "Autopilot"}
+              </button>
+            </ComposerTooltip>
+            <ComposerTooltip action="review-work" label={reviewTooltip}>
+              <button
+                type="button"
+                className="composer-tool-button"
+                onClick={() => openRailPanel("activity")}
+                disabled={!selected}
+              >
+                Review work
+              </button>
+            </ComposerTooltip>
             {dangerConfirm ? (
               <span className="danger-confirm">
                 <span>Bypass approvals?</span>
-                <button type="button" onClick={() => void setDangerousMode(true)} disabled={dangerBusy}>Enable</button>
-                <button type="button" onClick={() => setDangerConfirm(false)} disabled={dangerBusy}>Cancel</button>
+                <ComposerTooltip action="danger-enable" label="Enable approval bypass for this session.">
+                  <button type="button" onClick={() => void setDangerousMode(true)} disabled={dangerBusy}>Enable</button>
+                </ComposerTooltip>
+                <ComposerTooltip action="danger-cancel" label="Keep approval prompts on for this session.">
+                  <button type="button" onClick={() => setDangerConfirm(false)} disabled={dangerBusy}>Cancel</button>
+                </ComposerTooltip>
               </span>
             ) : null}
             {dangerNotice ? <span className="danger-mode-notice">{dangerNotice}</span> : null}
@@ -1942,26 +2425,27 @@ export function App() {
             </div>
           ) : null}
           <div className="composer-input-row">
-            <button
-              type="button"
-              className={`voice-input-button ${voiceState}`}
-              title={voiceButtonLabel}
-              aria-label={voiceButtonLabel}
-              aria-pressed={voiceState === "recording"}
-              disabled={voiceDisabled}
-              onClick={() => void toggleVoiceInput()}
-            >
-              <span className="voice-sketch" aria-hidden="true">
-                <span className="voice-sketch-capsule" />
-                <span className="voice-sketch-stem" />
-                <span className="voice-sketch-base" />
-              </span>
-            </button>
+            <ComposerTooltip action="voice-input" label={voiceTooltip} align="left">
+              <button
+                type="button"
+                className={`voice-input-button ${voiceState}`}
+                aria-label={voiceButtonLabel}
+                aria-pressed={voiceState === "recording"}
+                disabled={voiceDisabled}
+                onClick={() => void toggleVoiceInput()}
+              >
+                <span className="voice-sketch" aria-hidden="true">
+                  <span className="voice-sketch-capsule" />
+                  <span className="voice-sketch-stem" />
+                  <span className="voice-sketch-base" />
+                </span>
+              </button>
+            </ComposerTooltip>
             <textarea
               ref={draftRef}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder={selected?.status === "running" ? "ForgeAgent is running…" : "Ask ForgeAgent anything…"}
+              placeholder={selected?.status === "running" ? "DeepSeek-Forge is running…" : "Ask DeepSeek-Forge anything…"}
               rows={1}
               disabled={selected?.status === "running" || voiceState !== "idle"}
               onCompositionStart={composerEnterSubmit.onCompositionStart}
@@ -1970,24 +2454,33 @@ export function App() {
             />
           </div>
           <div className="composer-actions">
-            <button
-              className="send-button"
-              onClick={() => void submitMessage()}
-              disabled={busy || selected?.status === "running" || voiceState !== "idle" || (!draft.trim() && attachments.length === 0)}
-            >
-            Send
-            </button>
+            <ComposerTooltip action="send" label={sendTooltip} align="right">
+              <button
+                type="button"
+                className="send-button"
+                onClick={() => void submitMessage()}
+                disabled={sendDisabled}
+              >
+                Send
+              </button>
+            </ComposerTooltip>
           </div>
         </footer>
 
         {terminalOpen ? (
           <TerminalPanel
-            session={terminalSession}
-            events={terminalEvents}
-            busy={terminalBusy}
-            error={terminalError}
+            tabs={terminalTabs}
+            activeId={activeTerminalId}
+            session={activeTerminal?.session ?? null}
+            events={activeTerminal?.events ?? []}
+            busy={activeTerminal?.busy ?? terminalCreating}
+            creating={terminalCreating}
+            error={activeTerminal?.error || terminalGlobalError}
             scrollRef={terminalScrollRef}
             paneRef={terminalPaneRef}
+            onSelect={(terminalId) => void activateTerminalTab(terminalId)}
+            onNew={() => void createTerminalTab()}
+            onCloseTab={(terminalId) => void closeTerminalTab(terminalId)}
             onInput={(data) => void sendTerminalData(data)}
             onStop={() => void stopTerminal()}
             onRestart={() => void restartTerminal()}
@@ -1998,14 +2491,16 @@ export function App() {
         )}
       </section>
 
-      <button
-        type="button"
-        className="column-resize right-column-resize"
-        aria-label="Resize inspector column"
-        title="Resize inspector column"
-        onPointerDown={(event) => beginColumnResize("right", event)}
-      />
-      <aside className="inspector" aria-label="Context inspector">
+      {!rightCollapsed ? (
+        <button
+          type="button"
+          className="column-resize right-column-resize"
+          aria-label="Resize inspector column"
+          title="Resize inspector column"
+          onPointerDown={(event) => beginColumnResize("right", event)}
+        />
+      ) : <div className="column-resize right-column-resize collapsed" aria-hidden="true" />}
+      <aside className={`inspector ${rightCollapsed ? "collapsed" : ""}`} aria-label="Context inspector">
         <StatusRail
           activePanel={railPanel}
           setup={setup}
@@ -2014,7 +2509,9 @@ export function App() {
           activity={activity}
           pendingPermissions={pendingPermissions}
           deviceState={deviceState}
-          onSelect={(panel) => setRailPanel((current) => current === panel ? null : panel)}
+          collapsed={rightCollapsed}
+          onToggleCollapsed={() => setRightCollapsed((value) => !value)}
+          onSelect={selectRailPanel}
         />
         <div className="inspector-content">
           {railPanel ? (
@@ -2038,7 +2535,7 @@ export function App() {
               activity={activity}
               pendingPermissions={pendingPermissions}
               deviceState={deviceState}
-              onSelect={setRailPanel}
+              onSelect={openRailPanel}
             />
           )}
         </div>
@@ -2120,11 +2617,11 @@ function terminalStatusText(session: TerminalSession | null, busy: boolean): str
 
 function terminalErrorMessage(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
-  if (message.includes("ForgeAgent API returned non-JSON content")) {
-    return "Terminal API is not available from this page. Restart ForgeAgent Core, and if you are using Vite dev server, make sure /terminal is proxied to Core.";
+  if (message.includes("DeepSeek-Forge API returned non-JSON content")) {
+    return "Terminal API is not available from this page. Restart DeepSeek-Forge Core, and if you are using Vite dev server, make sure /terminal is proxied to Core.";
   }
   if (message.includes("404")) {
-    return "Terminal API is not available in the running Core. Restart ForgeAgent so the latest backend routes are loaded.";
+    return "Terminal API is not available in the running Core. Restart DeepSeek-Forge so the latest backend routes are loaded.";
   }
   return message;
 }
@@ -2166,12 +2663,18 @@ function terminalKeyData(event: ReactKeyboardEvent): string | null {
 }
 
 function TerminalPanel(props: {
+  tabs: TerminalTabState[];
+  activeId: string | null;
   session: TerminalSession | null;
   events: TerminalOutputEvent[];
   busy: boolean;
+  creating: boolean;
   error: string;
   scrollRef: RefObject<HTMLDivElement | null>;
   paneRef: RefObject<HTMLDivElement | null>;
+  onSelect: (terminalId: string) => void;
+  onNew: () => void;
+  onCloseTab: (terminalId: string) => void;
   onInput: (data: string) => void;
   onStop: () => void;
   onRestart: () => void;
@@ -2183,7 +2686,46 @@ function TerminalPanel(props: {
     <section className="terminal-panel" aria-label="Interactive terminal">
       <div className="terminal-header">
         <div className="terminal-title">
-          <strong>Terminal</strong>
+          <div className="terminal-tabs" role="tablist" aria-label="Terminal sessions">
+            {props.tabs.map((tab, index) => {
+              const active = tab.session.id === props.activeId;
+              const title = terminalTabTitle(tab, index);
+              return (
+                <div key={tab.session.id} className={`terminal-tab ${active ? "active" : ""}`}>
+                  <button
+                    type="button"
+                    className="terminal-tab-select"
+                    role="tab"
+                    aria-selected={active}
+                    title={title}
+                    onClick={() => props.onSelect(tab.session.id)}
+                  >
+                    <span className={`terminal-tab-status ${tab.session.status}`} aria-hidden="true" />
+                    <span>{`Terminal ${index + 1}`}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="terminal-tab-close"
+                    aria-label={`Close Terminal ${index + 1}`}
+                    title={`Close Terminal ${index + 1}`}
+                    onClick={() => props.onCloseTab(tab.session.id)}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              className="terminal-new-tab"
+              onClick={props.onNew}
+              disabled={props.creating}
+              aria-label="New terminal"
+              title="New terminal"
+            >
+              +
+            </button>
+          </div>
           <span>{terminalStatusText(props.session, props.busy)}</span>
         </div>
         <div className="terminal-actions">
@@ -2240,12 +2782,33 @@ function ProviderSetup(props: {
   onSaved: (status: SetupStatus) => void;
   onError: (error: string) => void;
 }) {
+  return (
+    <section className="setup-panel">
+      <h2>Connect DeepSeek</h2>
+      <p>Save the model key locally on this machine.</p>
+      <ProviderConfigForm setup={props.setup} onSaved={props.onSaved} onError={props.onError} />
+    </section>
+  );
+}
+
+function ProviderConfigForm(props: {
+  setup: SetupStatus;
+  onSaved: (status: SetupStatus) => void;
+  onError: (error: string) => void;
+  compact?: boolean;
+}) {
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(props.setup.provider.baseUrl);
   const [model, setModel] = useState(props.setup.provider.model);
   const [contextWindowTokens, setContextWindowTokens] = useState(String(props.setup.provider.contextWindowTokens));
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setBaseUrl(props.setup.provider.baseUrl);
+    setModel(props.setup.provider.model);
+    setContextWindowTokens(String(props.setup.provider.contextWindowTokens));
+  }, [props.setup.provider.baseUrl, props.setup.provider.contextWindowTokens, props.setup.provider.model]);
 
   async function save(testOnly: boolean) {
     setSaving(true);
@@ -2265,7 +2828,7 @@ function ProviderSetup(props: {
         const saved = await api.saveProvider(input);
         props.onSaved(saved);
         setApiKey("");
-        setMessage("Provider saved. ForgeAgent is ready.");
+        setMessage("Provider saved. DeepSeek-Forge is ready.");
       }
     } catch (err) {
       props.onError(err instanceof Error ? err.message : String(err));
@@ -2275,10 +2838,19 @@ function ProviderSetup(props: {
   }
 
   return (
-    <section className="setup-panel">
-      <h2>Connect DeepSeek</h2>
-      <p>Save your API key locally on this machine. ForgeAgent never returns it through diagnostics or status APIs.</p>
-      <div className="setup-grid">
+    <>
+      <div className={`setup-status-strip ${props.setup.provider.configured ? "configured" : "missing"}`}>
+        <span>{props.setup.provider.configured ? "Configured" : "Missing key"}</span>
+        <strong>{props.setup.provider.apiKeyMasked ?? "No API key"}</strong>
+        <small>{props.setup.provider.source.replace("_", " ")}</small>
+      </div>
+      <div className={`setup-grid ${props.compact ? "compact" : ""}`}>
+        <label>
+          Provider
+          <select value={props.setup.provider.provider} disabled>
+            <option value="deepseek">DeepSeek</option>
+          </select>
+        </label>
         <label>
           API key
           <input type="password" value={apiKey} placeholder={props.setup.provider.apiKeyMasked ?? "sk-…"} onChange={(event) => setApiKey(event.target.value)} />
@@ -2297,11 +2869,88 @@ function ProviderSetup(props: {
         </label>
       </div>
       <div className="setup-actions">
-        <button onClick={() => void save(true)} disabled={saving}>Test</button>
-        <button className="primary" onClick={() => void save(false)} disabled={saving}>Save provider</button>
+        <button type="button" onClick={() => void save(true)} disabled={saving}>Test connection</button>
+        <button type="button" className="primary" onClick={() => void save(false)} disabled={saving}>Save provider</button>
         {message ? <span>{message}</span> : null}
       </div>
-    </section>
+    </>
+  );
+}
+
+function SettingsDialog(props: {
+  setup: SetupStatus;
+  onSaved: (status: SetupStatus) => void;
+  onError: (error: string) => void;
+  onClose: () => void;
+}) {
+  const [section, setSection] = useState<"models" | "runtime" | "local">("models");
+  const sections: Array<{ id: typeof section; label: string }> = [
+    { id: "models", label: "Models" },
+    { id: "runtime", label: "Runtime" },
+    { id: "local", label: "Local access" },
+  ];
+  return (
+    <div
+      className="settings-overlay"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) props.onClose();
+      }}
+    >
+      <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <header className="settings-dialog-header">
+          <div>
+            <span>Settings</span>
+            <strong id="settings-title">Local model configuration</strong>
+          </div>
+          <button type="button" className="icon-button" onClick={props.onClose} aria-label="Close settings">×</button>
+        </header>
+        <div className="settings-dialog-body">
+          <aside className="settings-dialog-nav" aria-label="Settings sections">
+            {sections.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={section === item.id ? "active" : ""}
+                onClick={() => setSection(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </aside>
+          <section className="settings-dialog-panel">
+            {section === "models" ? (
+              <>
+                <div className="settings-section-heading">
+                  <span>Provider</span>
+                  <strong>DeepSeek</strong>
+                </div>
+                <ProviderConfigForm
+                  setup={props.setup}
+                  onSaved={props.onSaved}
+                  onError={props.onError}
+                  compact
+                />
+              </>
+            ) : null}
+            {section === "runtime" ? (
+              <div className="settings-readonly-grid">
+                <div><span>Primary model</span><strong>{props.setup.provider.model}</strong></div>
+                <div><span>Context window</span><strong>{compactNumber(props.setup.provider.contextWindowTokens)}</strong></div>
+                <div><span>Config source</span><strong>{props.setup.provider.source.replace("_", " ")}</strong></div>
+              </div>
+            ) : null}
+            {section === "local" ? (
+              <div className="settings-readonly-grid">
+                <div><span>Base URL</span><strong>{props.setup.provider.baseUrl}</strong></div>
+                <div><span>Stored key</span><strong>{props.setup.provider.apiKeyMasked ?? "none"}</strong></div>
+                <div><span>Updated</span><strong>{props.setup.provider.updatedAt ? new Date(props.setup.provider.updatedAt).toLocaleString() : "not saved"}</strong></div>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -2396,7 +3045,7 @@ function reviewInfoForExtension(candidate: ExtensionCandidate): ExtensionReviewI
       location,
       scan: scanText,
       nextStep: reviewAction === "trust_enable"
-        ? "If this is the extension you intended to use, trust and enable it here. Any scripts or tools it suggests still go through normal ForgeAgent permissions and sandbox."
+        ? "If this is the extension you intended to use, trust and enable it here. Any scripts or tools it suggests still go through normal DeepSeek-Forge permissions and sandbox."
         : "This extension is already enabled; runtime permissions and sandbox still apply when it uses tools.",
       findings: scan?.findings ?? [],
     };
@@ -2524,6 +3173,486 @@ function ExtensionReviewPanel(props: {
   );
 }
 
+type ExtensionWorkbenchTab = "recommended" | "all" | "installed" | "review" | "sources" | "events";
+
+function ExtensionsWorkbench(props: {
+  status: ExtensionStatus | null;
+  candidates: ExtensionCandidate[];
+  loading: boolean;
+  onCandidates: (items: ExtensionCandidate[]) => void;
+  onReload: () => Promise<ExtensionStatus>;
+  onError: (error: string) => void;
+  error?: string;
+  onOpenChat: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [link, setLink] = useState("");
+  const [includeInstalled, setIncludeInstalled] = useState(true);
+  const [busyId, setBusyId] = useState("");
+  const [message, setMessage] = useState("");
+  const [tab, setTab] = useState<ExtensionWorkbenchTab>("recommended");
+  const [selectedCandidateId, setSelectedCandidateId] = useState("");
+  const [sourceName, setSourceName] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [sourceKind, setSourceKind] = useState<"http" | "github" | "file">("http");
+
+  const attentionCount = useMemo(() => (
+    props.candidates.filter(isAttentionCandidate).length ||
+    ((props.status?.counts.quarantined ?? 0) + (props.status?.counts.invalid ?? 0))
+  ), [props.candidates, props.status?.counts.invalid, props.status?.counts.quarantined]);
+
+  const visibleCandidates = useMemo(() => props.candidates.filter((candidate) => {
+    if (tab === "recommended") return candidate.recommended === true || candidate.trust === "official" || candidate.trust === "curated";
+    if (tab === "installed") return candidate.installed;
+    if (tab === "review") return isAttentionCandidate(candidate);
+    return tab === "all";
+  }), [props.candidates, tab]);
+
+  const selectedCandidate = useMemo(
+    () => visibleCandidates.find((candidate) => candidate.id === selectedCandidateId) ?? visibleCandidates[0] ?? null,
+    [selectedCandidateId, visibleCandidates],
+  );
+
+  useEffect(() => {
+    if (props.candidates.length > 0) return;
+    if (busyId === "search") return;
+    void api.searchExtensions({ includeInstalled: true }).then((result) => {
+      props.onCandidates(result.candidates);
+    }).catch((err) => {
+      props.onError(err instanceof Error ? err.message : String(err));
+    });
+  }, [busyId, props.candidates.length, props.onCandidates, props.onError]);
+
+  useEffect(() => {
+    if (tab === "sources" || tab === "events") return;
+    if (!selectedCandidate) {
+      if (selectedCandidateId) setSelectedCandidateId("");
+      return;
+    }
+    if (selectedCandidate.id !== selectedCandidateId) setSelectedCandidateId(selectedCandidate.id);
+  }, [selectedCandidate, selectedCandidateId, tab]);
+
+  function searchOptions(): { query?: string; link?: string; includeInstalled?: boolean } {
+    const options: { includeInstalled?: boolean; query?: string; link?: string } = { includeInstalled };
+    const trimmedQuery = query.trim();
+    const trimmedLink = link.trim();
+    if (trimmedQuery) options.query = trimmedQuery;
+    if (trimmedLink) options.link = trimmedLink;
+    return options;
+  }
+
+  async function refreshCandidates(nextTab = tab) {
+    const refreshed = await api.searchExtensions(searchOptions());
+    props.onCandidates(refreshed.candidates);
+    if (nextTab !== "sources" && nextTab !== "events") {
+      setSelectedCandidateId(refreshed.candidates[0]?.id ?? "");
+    }
+  }
+
+  async function search() {
+    setBusyId("search");
+    setMessage("");
+    props.onError("");
+    props.onCandidates([]);
+    setTab("all");
+    try {
+      const result = await api.searchExtensions(searchOptions());
+      props.onCandidates(result.candidates);
+      setSelectedCandidateId(result.candidates[0]?.id ?? "");
+      setMessage(result.candidates.length === 0 ? "No matching extensions found." : `Found ${result.candidates.length} extension candidate(s).`);
+    } catch (err) {
+      props.onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function install(candidate: ExtensionCandidate) {
+    setBusyId(candidate.id);
+    setMessage("");
+    props.onError("");
+    try {
+      const result = await api.installExtension(candidate.installInput);
+      setMessage(result.message);
+      await props.onReload();
+      await refreshCandidates();
+    } catch (err) {
+      props.onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function enable(candidate: ExtensionCandidate, options?: { trustWarnings?: boolean }) {
+    setBusyId(candidate.id);
+    setMessage("");
+    props.onError("");
+    try {
+      const idOrName = candidate.kind === "skill"
+        ? candidate.name
+        : candidate.kind === "bundle"
+          ? candidate.name
+          : candidate.source;
+      const version = metadataString(candidate, "version") || undefined;
+      const result = await api.enableExtension(candidate.kind, idOrName, version, options);
+      setMessage(result.message);
+      await props.onReload();
+      await refreshCandidates();
+    } catch (err) {
+      props.onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function addSource() {
+    setBusyId("add-source");
+    setMessage("");
+    props.onError("");
+    try {
+      const input: { kind: "http" | "github" | "file"; name: string; url?: string; path?: string } = {
+        kind: sourceKind,
+        name: sourceName.trim(),
+      };
+      if (sourceKind === "file") input.path = sourceUrl.trim();
+      else input.url = sourceUrl.trim();
+      await api.addExtensionSource(input);
+      const refreshed = await props.onReload();
+      await refreshCandidates("sources");
+      setSourceName("");
+      setSourceUrl("");
+      setMessage(`Source added. ${refreshed.registry.sources.length} source(s) configured.`);
+    } catch (err) {
+      props.onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function refreshSource(sourceId: string) {
+    setBusyId(`source:${sourceId}`);
+    setMessage("");
+    props.onError("");
+    try {
+      const source = await api.refreshExtensionSource(sourceId);
+      await props.onReload();
+      setMessage(source.lastError ? `Refresh failed: ${source.lastError}` : `Source refreshed: ${source.name}`);
+    } catch (err) {
+      props.onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function removeSource(sourceId: string) {
+    setBusyId(`source:${sourceId}`);
+    setMessage("");
+    props.onError("");
+    try {
+      await api.removeExtensionSource(sourceId);
+      await props.onReload();
+      setMessage("Source removed.");
+    } catch (err) {
+      props.onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  const tabItems: Array<{ id: ExtensionWorkbenchTab; label: string; count: string | number }> = [
+    { id: "recommended", label: "Library", count: props.candidates.filter((item) => item.recommended || item.trust === "official" || item.trust === "curated").length },
+    { id: "all", label: "All", count: props.candidates.length },
+    { id: "installed", label: "Installed", count: props.status?.counts.installed ?? "—" },
+    { id: "review", label: "Attention", count: attentionCount },
+    { id: "sources", label: "Sources", count: props.status?.registry.sources.length ?? "—" },
+    { id: "events", label: "Events", count: props.status?.registry.events.length ?? "—" },
+  ];
+
+  function renderCandidateAction(candidate: ExtensionCandidate) {
+    const review = reviewInfoForExtension(candidate);
+    if (!candidate.installed) {
+      return (
+        <button type="button" className="primary" onClick={() => void install(candidate)} disabled={Boolean(busyId)}>
+          {busyId === candidate.id ? "Installing…" : "Install"}
+        </button>
+      );
+    }
+    if (candidate.enabled) return <span className="extension-enabled">Enabled</span>;
+    if (review && candidate.reviewAction === "trust_enable") {
+      return (
+        <button type="button" className="primary" onClick={() => void enable(candidate, { trustWarnings: true })} disabled={Boolean(busyId)}>
+          {busyId === candidate.id ? "Enabling…" : "Trust and enable"}
+        </button>
+      );
+    }
+    if (review) {
+      return <button type="button" onClick={() => setTab("review")}>{candidate.reviewAction === "setup_required" ? "Setup" : "Review"}</button>;
+    }
+    return (
+      <button type="button" className="primary" onClick={() => void enable(candidate)} disabled={Boolean(busyId)}>
+        {busyId === candidate.id ? "Enabling…" : "Enable"}
+      </button>
+    );
+  }
+
+  function renderCandidateDetail() {
+    if (!selectedCandidate) {
+      return (
+        <div className="extension-detail-empty">
+          <strong>{props.loading ? "Loading library…" : "No extension selected"}</strong>
+          <span>{tab === "recommended" ? "Refresh the local library or search by name." : "Search or choose another view."}</span>
+        </div>
+      );
+    }
+    const review = reviewInfoForExtension(selectedCandidate);
+    return (
+      <>
+        <div className="extension-detail-head">
+          <span className={`extension-status-dot ${selectedCandidate.status}`} aria-hidden="true" />
+          <div>
+            <strong>{selectedCandidate.title}</strong>
+            <span>{selectedCandidate.name}</span>
+          </div>
+        </div>
+        <p className="extension-detail-description">{selectedCandidate.description}</p>
+        <div className="extension-detail-actions">
+          {renderCandidateAction(selectedCandidate)}
+          <button type="button" onClick={() => void navigator.clipboard?.writeText(selectedCandidate.source)}>
+            Copy source
+          </button>
+        </div>
+        <DrawerRows rows={[
+          ["Kind", selectedCandidate.kind],
+          ["Status", selectedCandidate.status],
+          ["Trust", selectedCandidate.trust],
+          ["Source", selectedCandidate.sourceLabel],
+          ["Risk", selectedCandidate.riskSummary],
+        ]} />
+        {selectedCandidate.setupRequired ? <p className="extension-setup">Setup required: {selectedCandidate.postInstall ?? "configure required values before enabling."}</p> : null}
+        {review ? (
+          <ExtensionReviewPanel
+            candidate={selectedCandidate}
+            review={review}
+            busy={busyId === selectedCandidate.id}
+            onTrustEnable={() => void enable(selectedCandidate, { trustWarnings: true })}
+            onRescan={() => void search()}
+            onOpenEvents={() => setTab("events")}
+            onOpenSources={() => setTab("sources")}
+          />
+        ) : null}
+        <div className="extension-tags detail-tags">
+          {selectedCandidate.capabilities.map((capability) => <span key={capability}>{capability}</span>)}
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <div className="extensions-workbench">
+      <header className="extensions-workbench-header">
+        <div>
+          <strong>Extensions</strong>
+          <span>Skills, MCP tools, connectors</span>
+        </div>
+        <div className="extensions-workbench-actions">
+          <button type="button" onClick={() => void refreshCandidates()} disabled={props.loading || Boolean(busyId)}>
+            Refresh
+          </button>
+          <button type="button" onClick={props.onOpenChat}>Back to chat</button>
+        </div>
+      </header>
+
+      <section className="extensions-command-panel">
+        <label>
+          <span>Search</span>
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="filesystem mcp, github, design skill..."
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void search();
+            }}
+          />
+        </label>
+        <label>
+          <span>Link</span>
+          <input
+            value={link}
+            onChange={(event) => setLink(event.target.value)}
+            placeholder="https://github.com/owner/repo"
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void search();
+            }}
+          />
+        </label>
+        <label className="extensions-inline-check">
+          <input type="checkbox" checked={includeInstalled} onChange={(event) => setIncludeInstalled(event.target.checked)} />
+          <span>Installed</span>
+        </label>
+        <button type="button" className="primary" disabled={busyId === "search"} onClick={() => void search()}>
+          {busyId === "search" ? "Searching…" : "Search"}
+        </button>
+      </section>
+
+      {props.error ? <div className="extension-banner error">{props.error}</div> : null}
+      {message ? <div className="extension-banner">{message}</div> : null}
+
+      <section className="extensions-layout" aria-label="Extensions workspace">
+        <aside className="extensions-nav-panel">
+          <div className="extensions-nav-summary">
+            <div><span>Installed</span><strong>{props.status?.counts.installed ?? "—"}</strong></div>
+            <div><span>Enabled</span><strong>{props.status?.counts.enabled ?? "—"}</strong></div>
+            <div><span>MCP tools</span><strong>{props.status?.mcp.tools.length ?? "—"}</strong></div>
+          </div>
+          <nav aria-label="Extension views">
+            {tabItems.map((item) => (
+              <button
+                type="button"
+                key={item.id}
+                className={tab === item.id ? "active" : ""}
+                onClick={() => setTab(item.id)}
+              >
+                <span>{item.label}</span>
+                <strong>{item.count}</strong>
+              </button>
+            ))}
+          </nav>
+        </aside>
+
+        {tab === "sources" ? (
+          <>
+            <section className="extensions-list-panel">
+              <div className="extensions-list-heading">
+                <strong>Registry sources</strong>
+                <span>{props.status?.registry.sources.length ?? 0} configured</span>
+              </div>
+              <article className="extension-source-compact">
+                <select value={sourceKind} onChange={(event) => setSourceKind(event.target.value as "http" | "github" | "file")}>
+                  <option value="http">HTTP JSON</option>
+                  <option value="github">GitHub JSON</option>
+                  <option value="file">Local file</option>
+                </select>
+                <input value={sourceName} onChange={(event) => setSourceName(event.target.value)} placeholder="Source name" />
+                <input value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder={sourceKind === "file" ? "/path/to/registry.json" : "https://example.com/registry.json"} />
+                <button type="button" className="primary" onClick={() => void addSource()} disabled={Boolean(busyId) || !sourceName.trim() || !sourceUrl.trim()}>
+                  {busyId === "add-source" ? "Adding…" : "Add"}
+                </button>
+              </article>
+              <div className="extensions-source-list">
+                {(props.status?.registry.sources ?? []).map((source) => (
+                  <article className={`extension-source-row ${source.lastError ? "invalid" : ""}`} key={source.id}>
+                    <div>
+                      <strong>{source.name}</strong>
+                      <span>{source.url ?? source.path ?? source.id}</span>
+                    </div>
+                    <div className="extension-source-actions">
+                      <span className={`extension-pill ${source.trust}`}>{source.trust}</span>
+                      {source.kind !== "builtin" ? (
+                        <>
+                          <button type="button" onClick={() => void refreshSource(source.id)} disabled={Boolean(busyId)}>
+                            {busyId === `source:${source.id}` ? "Working…" : "Refresh"}
+                          </button>
+                          <button type="button" onClick={() => void removeSource(source.id)} disabled={Boolean(busyId)}>Remove</button>
+                        </>
+                      ) : <span className="extension-enabled">Built in</span>}
+                    </div>
+                    {source.lastError ? <p>{source.lastError}</p> : null}
+                  </article>
+                ))}
+              </div>
+            </section>
+            <aside className="extension-detail-panel">
+              <div className="extension-detail-empty">
+                <strong>Registry diagnostics</strong>
+                <span>{(props.status?.registry.diagnostics ?? []).length ? props.status?.registry.diagnostics.join(" ") : "No diagnostics reported."}</span>
+              </div>
+            </aside>
+          </>
+        ) : tab === "events" ? (
+          <>
+            <section className="extensions-list-panel">
+              <div className="extensions-list-heading">
+                <strong>Audit trail</strong>
+                <span>{props.status?.registry.events.length ?? 0} events</span>
+              </div>
+              <div className="extensions-event-list">
+                {(props.status?.registry.events ?? []).length === 0 ? (
+                  <div className="extension-empty compact">
+                    <h2>No extension events yet.</h2>
+                    <p>Installs, source refreshes, failures, and enables will appear here.</p>
+                  </div>
+                ) : (props.status?.registry.events ?? []).map((event) => (
+                  <article className="extension-event-row" key={event.seq}>
+                    <span>#{event.seq}</span>
+                    <div>
+                      <strong>{event.detail}</strong>
+                      <p>{event.message}</p>
+                      <small>{new Date(event.timestamp).toLocaleString()}</small>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+            <aside className="extension-detail-panel">
+              <div className="extension-detail-empty">
+                <strong>Latest activity</strong>
+                <span>{props.status?.registry.events[0]?.message ?? "No extension activity recorded."}</span>
+              </div>
+            </aside>
+          </>
+        ) : (
+          <>
+            <section className="extensions-list-panel">
+              <div className="extensions-list-heading">
+                <strong>{tabItems.find((item) => item.id === tab)?.label ?? "Extensions"}</strong>
+                <span>{visibleCandidates.length} results</span>
+              </div>
+              {tab === "review" ? (
+                <div className="extension-attention-note compact">
+                  <strong>Attention</strong>
+                  <span>Warnings can be trusted here. Blocked extensions must be fixed before enabling.</span>
+                </div>
+              ) : null}
+              <div className="extensions-result-list">
+                {visibleCandidates.length === 0 ? (
+                  <div className="extension-empty compact">
+                    <h2>{props.loading ? "Loading library…" : "No matching extensions."}</h2>
+                    <p>{tab === "recommended" ? "Refresh the local library or search by name." : "Try another view or paste a source link."}</p>
+                  </div>
+                ) : visibleCandidates.map((candidate) => {
+                  const review = reviewInfoForExtension(candidate);
+                  return (
+                    <button
+                      type="button"
+                      key={candidate.id}
+                      className={`extension-list-item ${candidate.id === selectedCandidate?.id ? "selected" : ""} ${candidate.status}`}
+                      onClick={() => setSelectedCandidateId(candidate.id)}
+                    >
+                      <span className={`extension-status-dot ${candidate.status}`} aria-hidden="true" />
+                      <span className="extension-list-copy">
+                        <strong>{candidate.title}</strong>
+                        <span>{candidate.description}</span>
+                        <small>{candidate.sourceLabel}</small>
+                      </span>
+                      <span className="extension-list-meta">
+                        {review ? <em>review</em> : null}
+                        <span>{candidate.kind}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+            <aside className="extension-detail-panel">
+              {renderCandidateDetail()}
+            </aside>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function ExtensionsCenter(props: {
   status: ExtensionStatus | null;
   candidates: ExtensionCandidate[];
@@ -2531,6 +3660,7 @@ function ExtensionsCenter(props: {
   onCandidates: (items: ExtensionCandidate[]) => void;
   onReload: () => Promise<ExtensionStatus>;
   onError: (error: string) => void;
+  error?: string;
   onOpenChat: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -2686,10 +3816,10 @@ function ExtensionsCenter(props: {
     <div className="extensions-center">
       <header className="extensions-header">
         <div>
-          <p className="eyebrow">ForgeAgent Extensions</p>
+          <p className="eyebrow">DeepSeek-Forge Extensions</p>
           <h1>Skills, MCP tools, and connectors</h1>
           <p>
-            Install capabilities manually here, or ask ForgeAgent in chat to install a named extension or a link.
+            Install capabilities manually here, or ask DeepSeek-Forge in chat to install a named extension or a link.
           </p>
         </div>
         <button type="button" onClick={props.onOpenChat}>Back to chat</button>
@@ -2848,7 +3978,7 @@ function ExtensionsCenter(props: {
           <div className="extension-empty">
             <h2>
               {tab === "recommended"
-                ? props.loading ? "Loading ForgeAgent Library…" : "ForgeAgent Library did not load."
+                ? props.loading ? "Loading DeepSeek-Forge Library…" : "DeepSeek-Forge Library did not load."
                 : "Start with a search or paste a link."}
             </h2>
             <p>
@@ -2856,7 +3986,7 @@ function ExtensionsCenter(props: {
                 ? "Fetching the built-in official and curated extension list from the local Core."
                 : tab === "recommended"
                   ? "No built-in recommendations were returned. Check the error above or refresh the local Core."
-                  : "ForgeAgent will show install inputs, trust state, and risk before anything is enabled."}
+                  : "DeepSeek-Forge will show install inputs, trust state, and risk before anything is enabled."}
             </p>
             {tab === "recommended" ? (
               <button type="button" onClick={() => void search()} disabled={Boolean(busyId)}>
@@ -2934,7 +4064,7 @@ function EmptyThread({ configured }: { configured: boolean }) {
       <h2>{configured ? "Start with a task, not setup." : "Configure the model first."}</h2>
       <p>
         {configured
-          ? "ForgeAgent will keep the durable thread here: tool calls, permission approvals, browser events, artifacts, usage, and final answers."
+          ? "DeepSeek-Forge will keep the durable thread here: tool calls, permission approvals, browser events, artifacts, usage, and final answers."
           : "Once DeepSeek is configured, the composer becomes the only place you need to focus."}
       </p>
     </div>
@@ -3064,12 +4194,12 @@ function EventBlock(props: {
     );
   }
   if (event.type === "assistant_message") {
-    return <article className="message assistant"><Meta label="ForgeAgent" time={event.timestamp} /><AssistantContent text={event.text} /></article>;
+    return <article className="message assistant"><Meta label="DeepSeek-Forge" time={event.timestamp} /><AssistantContent text={event.text} /></article>;
   }
   if (event.type === "assistant_stream") {
     return (
       <article className="message assistant streaming">
-        <Meta label="ForgeAgent" time={event.timestamp} />
+        <Meta label="DeepSeek-Forge" time={event.timestamp} />
         <AssistantContent text={event.text} streaming />
       </article>
     );
@@ -3543,6 +4673,12 @@ function InspectorOverview(props: {
       tone: contextPercent !== undefined && contextPercent > 80 ? "warn" : "neutral",
     },
     {
+      panel: "android",
+      label: "Pair Mobile",
+      value: "iPhone and Android",
+      tone: "neutral",
+    },
+    {
       panel: "activity",
       label: "Activity",
       value: `${props.activity.changes.length} changes · ${props.activity.checks.length} checks`,
@@ -3588,8 +4724,8 @@ function InspectorOverview(props: {
   return (
     <section className="inspector-overview">
       <div className="inspector-heading">
-        <span>Tools</span>
-        <strong>Context</strong>
+        <span>Status</span>
+        <strong>Details</strong>
       </div>
       <div className="inspector-menu">
         {items.map((item) => (
@@ -3620,119 +4756,67 @@ function StatusRail(props: {
   activity: WorkspaceActivityState;
   pendingPermissions: PermissionRequest[];
   deviceState: DeviceState | null;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   onSelect: (panel: RailPanel) => void;
 }) {
   const contextPercent = props.usage?.contextUsedPercent;
-  const notificationsEnabled = props.deviceState?.notificationSettings.enabled === true;
+  const cachePercent = props.usage?.cacheHitRateNow ?? props.usage?.cacheHitRateAverage;
   return (
     <aside className="status-rail" aria-label="Status rail">
-      <RailButton
-        panel="provider"
-        label="DeepSeek"
-        active={props.activePanel === "provider"}
-        tone={props.setup?.provider.configured ? "ok" : "warn"}
-        onSelect={props.onSelect}
-      />
-      <RailButton
-        panel="android"
-        label="Pair Mobile"
-        active={props.activePanel === "android"}
-        tone="neutral"
-        onSelect={props.onSelect}
-      />
-      <RailButton
-        panel="browser"
-        label="Chrome"
-        active={props.activePanel === "browser"}
-        tone={props.diagnostics?.webridge.state === "online" ? "ok" : "warn"}
-        ring
-        onSelect={props.onSelect}
-      />
-      <RailButton
-        panel="mcp"
-        label={`MCP · ${props.diagnostics?.mcp.tools ?? 0} tools`}
-        active={props.activePanel === "mcp"}
-        tone={
-          props.diagnostics?.mcp.state === "connected" || props.diagnostics?.mcp.state === "idle"
-            ? "ok"
-            : "warn"
-        }
-        badge={(props.diagnostics?.mcp.degraded ?? 0) + (props.diagnostics?.mcp.needsAuth ?? 0)}
-        onSelect={props.onSelect}
-      />
-      <RailButton
+      <button
+        type="button"
+        className="rail-collapse-button"
+        aria-label={props.collapsed ? "Expand context sidebar" : "Collapse context sidebar"}
+        title={props.collapsed ? "Expand context sidebar" : "Collapse context sidebar"}
+        onClick={props.onToggleCollapsed}
+      >
+        {props.collapsed ? "‹" : "›"}
+      </button>
+      <div className="rail-metrics" aria-label="Session metrics">
+        <RailMetric
         panel="context"
         label={contextPercent !== undefined ? `Context ${contextPercent.toFixed(0)}%` : "Context"}
         active={props.activePanel === "context"}
         percent={contextPercent}
+          variant="context"
         onSelect={props.onSelect}
       />
-      <RailButton
-        panel="activity"
-        label={`Activity · ${props.activity.changes.length} changes`}
-        active={props.activePanel === "activity"}
-        badge={props.activity.diagnostics.filter((item) => item.severity === "error").length}
-        tone={props.activity.diagnostics.some((item) => item.severity === "error") ? "warn" : "neutral"}
+        <RailMetric
+          panel="context"
+          label={cachePercent !== undefined ? `Cache ${cachePercent.toFixed(0)}%` : "Cache"}
+          active={props.activePanel === "context"}
+          percent={cachePercent}
+          variant="cache"
         onSelect={props.onSelect}
       />
-      <RailButton
-        panel="permissions"
-        label={`${props.pendingPermissions.length} permission requests`}
-        active={props.activePanel === "permissions"}
-        badge={props.pendingPermissions.length}
-        tone={props.pendingPermissions.length > 0 ? "warn" : "neutral"}
-        onSelect={props.onSelect}
-      />
-      <RailButton
-        panel="notifications"
-        label={notificationsEnabled ? "Notifications on" : "Notifications off"}
-        active={props.activePanel === "notifications"}
-        tone={notificationsEnabled ? "ok" : "neutral"}
-        onSelect={props.onSelect}
-      />
-      <RailButton
-        panel="memory"
-        label="Memory"
-        active={props.activePanel === "memory"}
-        tone={props.diagnostics?.memory.state === "degraded" ? "warn" : "ok"}
-        onSelect={props.onSelect}
-      />
-      <RailButton
-        panel="skills"
-        label="Skills"
-        active={props.activePanel === "skills"}
-        tone="ok"
-        onSelect={props.onSelect}
-      />
+      </div>
     </aside>
   );
 }
 
-function RailButton(props: {
+function RailMetric(props: {
   panel: RailPanel;
   label: string;
   active: boolean;
-  tone?: "ok" | "warn" | "neutral";
-  badge?: number;
-  ring?: boolean;
   percent?: number | undefined;
+  variant: "context" | "cache";
   onSelect: (panel: RailPanel) => void;
 }) {
   const percent = Math.max(0, Math.min(100, props.percent ?? 0));
-  const style = props.percent !== undefined
-    ? { "--rail-percent": `${percent * 3.6}deg` } as CSSProperties
-    : undefined;
+  const style = {
+    "--rail-percent": `${percent * 3.6}deg`,
+  } as CSSProperties;
   return (
     <button
       type="button"
-      className={`rail-button ${props.active ? "active" : ""} ${props.ring ? "ring" : ""} tone-${props.tone ?? "neutral"} ${props.percent !== undefined ? "progress" : ""}`}
+      className={`rail-metric ${props.active ? "active" : ""} ${props.percent === undefined ? "empty" : ""} ${props.variant}`}
       aria-label={props.label}
       title={props.label}
       onClick={() => props.onSelect(props.panel)}
       style={style}
     >
-      <span className="rail-glyph" />
-      {props.badge && props.badge > 0 ? <span className="rail-badge">{props.badge}</span> : null}
+      <span className="rail-metric-ring" aria-hidden="true" />
     </button>
   );
 }
@@ -4091,7 +5175,7 @@ function PairMobilePanel() {
         void checkGatewayReachable(selectedBaseUrl).then((reachable) => {
           if (!reachable) {
             setGatewayWarning(
-              "This local Gateway URL is not reachable from this browser. Restart ForgeAgent and refresh this panel.",
+              "This local Gateway URL is not reachable from this browser. Restart DeepSeek-Forge and refresh this panel.",
             );
           }
         });
@@ -4166,7 +5250,7 @@ function PairMobilePanel() {
           <>
             <strong>Android app pairing</strong>
             <ol>
-              <li>Open the ForgeAgent Android app and tap scan.</li>
+              <li>Open the DeepSeek-Forge Android app and tap scan.</li>
               <li>Scan the QR code below to pair this Mac.</li>
               <li>Android stores all LAN, Tailscale, and custom remote addresses for this Mac.</li>
             </ol>
@@ -4180,7 +5264,7 @@ function PairMobilePanel() {
             src={platform === "iphone" ? gatewayQrDataUrl : androidQrDataUrl}
             alt={platform === "iphone" ? "iPhone Safari Gateway URL QR code" : "Android app pairing QR code"}
           />
-          <figcaption>{platform === "iphone" ? "Scan with iPhone Camera" : "Scan with ForgeAgent Android"}</figcaption>
+          <figcaption>{platform === "iphone" ? "Scan with iPhone Camera" : "Scan with DeepSeek-Forge Android"}</figcaption>
         </figure>
       ) : null}
       {pairingUrl ? (
@@ -4336,7 +5420,7 @@ function RemoteAccessSummary({
         <button onClick={() => window.open("https://tailscale.com/download", "_blank", "noopener,noreferrer")}>Install/Open Tailscale</button>
         {needsOptimization ? (
           <button type="button" onClick={onOptimizeTailscale} disabled={optimizingTailscale}>
-            {optimizingTailscale ? "Optimizing…" : "Optimize Tailscale for ForgeAgent"}
+            {optimizingTailscale ? "Optimizing…" : "Optimize Tailscale for DeepSeek-Forge"}
           </button>
         ) : null}
       </div>
@@ -4373,13 +5457,13 @@ function remoteAccessLabel(status: NetworkUrls["remoteAccessStatus"]): string {
 function remoteAccessMessage(status: NetworkUrls["remoteAccessStatus"]): string {
   switch (status) {
     case "tailscale_ready":
-      return "ForgeAgent found a Tailscale address. Phones can keep using this Mac away from home when Tailscale is online.";
+      return "DeepSeek-Forge found a Tailscale address. Phones can keep using this Mac away from home when Tailscale is online.";
     case "custom_remote_ready":
-      return "ForgeAgent found a configured remote URL. Use this only with a trusted tunnel or HTTPS reverse proxy.";
+      return "DeepSeek-Forge found a configured remote URL. Use this only with a trusted tunnel or HTTPS reverse proxy.";
     case "lan_ready":
       return "Pairing works on this Wi-Fi. Install free Tailscale on the Mac and phone for away-from-home access.";
     case "local_only":
-      return "Only this Mac can reach ForgeAgent right now. Enable LAN/private remote access before pairing a phone.";
+      return "Only this Mac can reach DeepSeek-Forge right now. Enable LAN/private remote access before pairing a phone.";
   }
 }
 
@@ -4397,7 +5481,7 @@ async function checkGatewayReachable(baseUrl: string): Promise<boolean> {
     });
     if (!response.ok) return false;
     const data = await response.json() as { app?: unknown; status?: unknown };
-    return data.app === "ForgeAgent" && data.status === "ready";
+    return (data.app === PRODUCT_NAME || data.app === LEGACY_PRODUCT_NAME) && data.status === "ready";
   } catch {
     return false;
   } finally {

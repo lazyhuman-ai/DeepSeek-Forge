@@ -1,335 +1,196 @@
-# ForgeAgent
+# DeepSeek-Forge
 
 <p align="center">
-  <img src="assets/forge-agent-img.png" alt="ForgeAgent local agent workspace" width="100%" />
+  <img src="assets/forge_en.png" alt="DeepSeek-Forge DeepSeek-native local agent workspace" width="100%" />
 </p>
 
 <p align="center">
-  <strong>A local-first agent workspace for DeepSeek, MCP, Chrome, and multi-device work.</strong>
+  <strong>A DeepSeek-native local agent workspace for Mac, Chrome, Android, MCP, browser automation, and real project work.</strong>
 </p>
 
 <p align="center">
-  <a href="README.zh-CN.md">简体中文</a>
+  English · <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-ForgeAgent runs an agent core on your Mac and gives it a real workspace: project files, tools, browser access, MCP servers, long-context memory, and a durable conversation thread. The interface is a local Web Console, shared by the browser, the macOS app, iPhone/iPad Safari, and the Android app.
+> [!IMPORTANT]
+> DeepSeek-Forge is an independent open-source project. It is not an official DeepSeek product or affiliated with DeepSeek. The name describes the product's DeepSeek-first runtime path and telemetry support.
 
-It is built for people who want a Codex/Claude Code style local agent, but with first-class DeepSeek telemetry and a private, device-friendly workflow.
+DeepSeek-Forge runs a private agent core on your Mac and gives it a durable workspace: project files, command tools, browser access, MCP servers, long-context memory, extension skills, mobile access, and a single conversation/activity stream. It is meant to feel like a local agent product, not a hosted SaaS tab.
 
-> **Original project**
-> ForgeAgent is an original local-first agent workspace developed by the ForgeAgent contributors. It is released under the MIT License, so forks, modifications, and commercial use are welcome. If you build on ForgeAgent or present it publicly, attribution is appreciated: please mention ForgeAgent clearly where practical.
+The runtime is built around DeepSeek rather than treating it as a generic OpenAI-compatible endpoint. When DeepSeek returns usage, context, prefix-cache, and reasoning-token telemetry, DeepSeek-Forge records those facts and uses them for compaction, cost visibility, and debugging long sessions.
 
-## Why ForgeAgent
+## Why DeepSeek-Forge
 
-- **Your Mac is the runtime.** Sessions, files, tool results, artifacts, credentials, and device state stay on your machine.
-- **Projects are folders.** Each project maps to a workspace directory. File tools and sandbox rules are scoped around that folder.
-- **The thread is durable.** Tool calls, errors, permissions, browser events, usage, artifacts, and final answers are written back to the session.
-- **Errors are readable.** Permission denials, sandbox blocks, runtime failures, and tool errors are returned as text the agent can read and recover from.
-- **DeepSeek is not treated as a generic endpoint.** ForgeAgent reads real usage, context, cache, and reasoning-token telemetry when DeepSeek provides it.
+- **DeepSeek-native by default.** Real token usage, context usage, cache hit/miss, reasoning tokens, and cache-shape diagnostics are first-class product data.
+- **Local-first workspace.** Core, Web Console, macOS app, Android app, Chrome extension, MCP tools, permissions, artifacts, and session history share one local fact source.
+- **Not coding-only.** Coding is a high-density workspace adapter alongside documents, browser work, MCP/Blender tasks, research, generated reports, and automation.
+- **Multi-device private access.** Pair Android or iPhone/iPad Safari to the Mac running Core. Remote access is private-network first, with Tailscale as the recommended free path.
+- **Extension and MCP ready.** Install local skills, GitHub-hosted skill packages, and MCP servers into the same permission and artifact model.
+- **Beta-grade recovery.** Tool failures, sandbox denials, browser bridge outages, provider telemetry gaps, and blocked sessions are surfaced as readable state instead of silent hangs.
 
-## What You Get
+## Features
 
-- Local Web Console with Markdown, code blocks, safe HTML previews, file upload, session branching, and inline permission approval.
-- macOS app that starts or reuses the local Forge Core, keeps it alive with LaunchAgent, and uses a native power helper so the display may sleep while Core stays online.
-- iPhone/iPad support through Safari/PWA.
-- Android app with QR pairing, multiple saved Mac connections, background connection monitoring, and notifications.
-- DeepSeek-native token usage, context usage, prefix cache hit/miss, reasoning token, and cost ledger.
-- Workspace sandbox, session-level Danger Free mode, and reduced approval prompts for normal workspace tasks.
-- Chrome browser access through ForgeWebridge, using the Chrome profile you are already logged into.
-- MCP client support for stdio, streamable HTTP, and legacy SSE servers.
-- Local-first extension system for skills, MCP servers, and bundles.
-- Artifact storage for large tool output, with readable previews in the message thread.
-- Long-term memory, skills, scheduler, runtime recovery, and process restart rehydration.
+- DeepSeek provider setup with masked local key storage.
+- Usage ledger for token, context, reasoning, prefix cache, and cost events.
+- Context compaction with visible before/after telemetry.
+- Local Web Console for sessions, files, tasks, artifacts, usage, MCP, skills, memory, browser status, and mobile pairing.
+- macOS app that starts or reuses Core through LaunchAgent and keeps the local service online.
+- Android paired WebView client with QR pairing, connection recovery, and activity notifications.
+- ForgeWebridge Chrome extension for controlling the visible logged-in Chrome profile without reading cookies or passwords.
+- MCP registry and extension installer with packaged skills, assets, references, scripts, and templates.
+- Coding workspace support with LSP-oriented navigation, structured workspace activity, worktree/subagent flows, and release E2E gates.
 
-## Quick Start
+## Install
 
-### Requirements
+Requirements:
 
-- macOS for the main desktop runtime.
+- macOS for the local desktop Core and packaged app.
 - Node.js 20+.
 - A DeepSeek API key, or another configured provider.
-
-Install dependencies and start the local product:
+- Chrome if you want browser automation through ForgeWebridge.
+- Android Studio/JDK 17 only if you build the Android app locally.
 
 ```sh
 npm install
-npm run product:build
 npm run install:local
 ```
 
-`install:local` builds the Web Console, installs the local LaunchAgent, starts Forge Core, and opens:
+`install:local` builds the Web Console and installs the local gateway service. Then open:
 
 ```text
 http://127.0.0.1:3000
 ```
 
-Configure your provider from the setup screen. For DeepSeek, the default base URL is:
+DeepSeek's default API base URL is:
 
 ```text
 https://api.deepseek.com
 ```
 
-`.env` is still supported for development, but the Web Console setup screen is the recommended path for normal use.
+## Quick Start
+
+1. Open the local Web Console.
+2. Configure DeepSeek from setup.
+3. Create or select a workspace folder.
+4. Start a session and ask DeepSeek-Forge to inspect, edit, test, or automate something in that workspace.
+5. Add Chrome, MCP servers, skills, or mobile pairing only when the workflow needs them.
+
+Some internal commands and compatibility identifiers still use `forgeagent`, including the CLI script, URL scheme, package directories, LaunchAgent label, and device tokens. This keeps existing local installs, Android pairing, and Chrome bridge discovery working during the rename.
 
 ## macOS App
 
-Build and open the desktop app from source:
+Build and package the desktop shell:
 
 ```sh
-npm run macos:build
 npm run macos:package
-open apps/macos/ForgeAgentMac/dist/ForgeAgent.app
+open apps/macos/ForgeAgentMac/dist/DeepSeek-Forge.app
 ```
 
-The macOS app is not a separate chat client. It is the desktop shell for the same Forge Core and Web Console:
+The packaged app:
 
 - starts or reuses the local Core service;
 - installs `com.forgeagent.gateway` as a LaunchAgent;
-- listens on `0.0.0.0:3000` for private-network devices;
 - stores data in `~/Library/Application Support/ForgeAgent/data`;
-- keeps Core online with `ForgeAgentPowerHelper`, a native macOS idle-system-sleep assertion helper.
+- uses `ForgeAgentPowerHelper` to keep Core online while the display sleeps;
+- renders the same Web Console inside WKWebView.
 
-The display can sleep. Core should continue running. Real system sleep, lid-close sleep, network loss, or power loss will still interrupt remote access.
+## Brand Assets
 
-## Mobile Access
+The whale app icon is generated from one source file:
 
-ForgeAgent is local-first. Your phone connects to the Mac that is running Forge Core.
-
-For away-from-home access, the easiest free path is [Tailscale](https://tailscale.com/): install it on the Mac and phone, sign in to the same tailnet, then pair the phone from ForgeAgent.
-
-### iPhone / iPad
-
-iOS uses Safari or an installed PWA.
-
-1. Open **Pair Mobile** in the right rail of the Web Console.
-2. Choose **iPhone**.
-3. Scan the QR code with the camera.
-4. Safari opens the ForgeAgent Web Console and completes pairing.
-5. Optional: use **Add to Home Screen** for an app-like launcher.
-
-If Tailscale is available, ForgeAgent uses the Tailscale URL in the QR code. Otherwise it falls back to the LAN URL and clearly marks it as local-only.
-
-### Android
-
-Build the Android APK:
-
-```sh
-npm run android:build
+```text
+assets/icon.png
 ```
 
-The debug APK is written to:
+Run `node scripts/generate-icons.mjs` after changing it. The script regenerates the Web/PWA icon, macOS iconset and `.icns`, Android launcher and notification resources, and ForgeWebridge Chrome extension icons.
+
+Android uses an adaptive launcher icon so the app drawer and home-screen icon show the whale without Android adding a second legacy white tile. Android notification `smallIcon` is still system-tinted by design; expanded notifications also set the whale as the large icon.
+
+## Mobile
+
+DeepSeek-Forge is local-first. Your phone connects to the Mac running Core.
+
+Recommended remote access:
+
+1. Install Tailscale on the Mac and phone.
+2. Sign in to the same tailnet.
+3. Open **Pair Mobile** in the Web Console or macOS app.
+4. Scan the QR code from Android, or open the link from iPhone/iPad Safari.
+
+Android debug builds are written to:
 
 ```text
 apps/android/ForgeAgentAndroid/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Android pairing flow:
+## Chrome
 
-1. Open **Pair Mobile** on the Mac.
-2. Choose **Android**.
-3. Open the ForgeAgent Android app and scan the QR code.
-4. Android saves the Mac identity, LAN URLs, Tailscale URLs, custom remote URLs, and device token.
-5. The app loads the same Web Console as desktop.
-
-The Android app keeps a foreground connection service for connectivity and activity notifications. It does not run Forge Core.
-
-## Chrome Browser Access
-
-ForgeAgent uses a Chrome extension called ForgeWebridge for browser tasks. It connects the agent to your existing Chrome profile, including visible logged-in sessions.
-
-Package and open the extension folder:
+ForgeWebridge connects DeepSeek-Forge to your existing visible Chrome profile. It lets the agent operate logged-in pages you can see, while avoiding cookie/password extraction and stealth automation.
 
 ```sh
 npm run webridge:package
 npm run webridge:open
 ```
 
-Then in Chrome:
+The extension auto-discovers the local gateway, pairs through a short-lived code, keeps a heartbeat, and returns readable offline errors to the agent when Chrome is not connected.
 
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select the ForgeWebridge extension folder.
-5. If it is already installed, click **Reload** or **Refresh connection**.
+## MCP And Skills
 
-ForgeWebridge auto-discovers the local ForgeAgent gateway and keeps a heartbeat. If it is offline, browser tools return a readable error to the agent instead of hanging.
+DeepSeek-Forge is an MCP client and a local extension host. MCP tools and skill commands run through the same permission broker, sandbox, artifact store, and thread model as built-in tools.
 
-## MCP
-
-ForgeAgent is an MCP client. MCP tools are projected into the same tool runtime, permission broker, sandbox, artifact store, and thread model as built-in tools.
-
-Common commands:
+Useful commands:
 
 ```sh
 npm run mcp -- list
 npm run mcp -- add
-npm run mcp -- status
-npm run mcp -- doctor
+npm run extensions -- list
+npm run skills -- install-github
 ```
 
-For a real end-to-end example, see:
+GitHub skill installs preserve the full package when a skill directory includes `references/`, `scripts/`, `templates/`, `assets/`, or `tests/`.
 
-- [ForgeAgent + Blender MCP Quick Start](docs/blender-mcp-quickstart.md)
+## Release Builds
 
-Project `.mcp.json` files are discovered but not blindly trusted. Enable them from the UI or CLI after reviewing the transport, command, URL, environment variables, and authentication needs.
-
-If a server is not in the built-in catalog, install it from the **Extensions** page or register it explicitly:
+Run the release gate before sharing beta artifacts:
 
 ```sh
-DATA_DIR="$HOME/Library/Application Support/ForgeAgent/data"
-
-npm run mcp -- add \
-  --data-dir "$DATA_DIR" \
-  --name my-server \
-  --transport stdio \
-  --command npx \
-  --args "-y,@example/mcp-server,arg1,arg2" \
-  --env '{"EXAMPLE_API_KEY":"your-key"}' \
-  --trust untrusted \
-  --enabled
+npm run release:gate
+npm run release:bundle
 ```
 
-For HTTP or SSE servers, use:
-
-```sh
-npm run mcp -- add \
-  --transport streamable-http \
-  --url https://example.com/mcp \
-  --headers '{"Authorization":"Bearer ..."}'
-```
-
-Restart Forge Core after changing the macOS app data directory from the CLI.
-
-## Extensions
-
-ForgeAgent has a local-first extension system for skills, MCP servers, and bundles. The macOS app and Web Console include an **Extensions** page with:
-
-- recommended entries from the bundled registry snapshot;
-- installed extensions;
-- setup-required entries;
-- warning and blocked states;
-- registry sources;
-- install and audit events.
-
-You can also ask the agent naturally:
+The bundle step writes artifacts under:
 
 ```text
-Install filesystem MCP.
-Install this GitHub skill: https://github.com/owner/repo/tree/main/skills/my-skill
-Install the code review workspace bundle and use it on this project.
-Find a PDF research extension, install it, and use it on this file.
+.forge-release/dist/
 ```
 
-ForgeAgent installs GitHub skills as full packages. If `SKILL.md` lives in a directory, supporting files such as `references/`, `scripts/`, `templates/`, `assets/`, and `tests/` are installed with it. It does not reduce a skill to a raw `SKILL.md` download.
+Expected public beta artifacts include:
 
-CLI examples:
+- `DeepSeek-Forge-<version>-macos-arm64.zip`
+- `DeepSeek-Forge-<version>-android-debug.apk`
+- `ForgeWebridge-<version>.zip`
+- `release-manifest.json`
+- `SHA256SUMS`
 
-```sh
-npm run extensions -- status
-npm run extensions -- search filesystem
-npm run extensions -- install-skill-github https://github.com/owner/repo/tree/main/skills/my-skill
-npm run extensions -- install-bundle code-review-workspace
-npm run extensions -- install-mcp-catalog modelcontextprotocol-filesystem
-npm run extensions -- enable mcp_server filesystem
-npm run extensions -- doctor
-```
+See [docs/release-checklist.md](docs/release-checklist.md) before publishing.
 
-Built-in recommendations currently include:
+## Safety Model
 
-- MCP: Filesystem, Everything, Memory, Sequential Thinking, GitHub, Brave Search, Puppeteer, Postgres, PDF, Map, Three.js, Blender.
-- Skills: Serenity Invest, Code Reviewer, Frontend Design.
-- Bundles: Code Review Workspace, Design Reference, Investor Research, PDF Research.
+DeepSeek-Forge is intended for one user and their personal devices.
 
-## DeepSeek Telemetry
-
-DeepSeek support is a first-class path in ForgeAgent:
-
-- `prompt_tokens`, `completion_tokens`, and `total_tokens`;
-- prefix cache hit/miss tokens;
-- reasoning tokens;
-- cost and usage records;
-- real context-window percentage;
-- compaction based on real provider usage when available.
-
-When compaction happens, ForgeAgent shows a local estimate of the compressed context immediately, then replaces it with real provider telemetry after the next model call.
-
-## Data and Security Model
-
-ForgeAgent is designed for one user and multiple personal devices.
-
-- Source checkout data directory: `.forge/`
-- macOS app data directory: `~/Library/Application Support/ForgeAgent/data`
-- API keys stay on the local machine and are masked in status/diagnostic responses.
-- Business HTTP APIs require a device token.
-- Pairing codes are short-lived and one-time use.
-- Workspace sandboxing is scoped to the project folder and session scratch space.
-- Permission denials and sandbox blocks are returned to the agent as readable `tool_result` errors.
-- Danger Free is session-scoped. It reduces approvals for that session, but hard sandbox blocks still apply.
-
-ForgeAgent is not a hosted SaaS service. Do not expose it directly to the public internet. For remote phone access, use Tailscale, ZeroTier, a trusted private network, or a carefully configured HTTPS reverse proxy.
-
-## Useful Commands
-
-```sh
-npm run status          # local service status
-npm run doctor          # diagnostics
-npm run logs            # gateway logs
-npm run start           # start one local background gateway
-npm run stop            # stop it
-npm run forgeagent -- restart
-npm run check           # typecheck, product build, unit tests, UI e2e
-npm run native:build    # package/smoke macOS app + Android app build + Android connection unit tests
-npm run coding:e2e      # real-provider coding-agent release scenario
-npm run release:gate    # full release gate: check, native build, extensions e2e, release e2e
-npm run release:bundle  # build local beta artifacts under .forge-release/dist
-```
-
-For release preparation, see [docs/release-checklist.md](docs/release-checklist.md).
-
-## Troubleshooting
-
-### Web Console does not open
-
-```sh
-npm run status
-npm run doctor
-npm run logs
-```
-
-Restart the local service:
-
-```sh
-npm run forgeagent -- restart
-```
-
-### Phone cannot connect to the Mac
-
-Check that:
-
-- Forge Core is running on the Mac.
-- The phone can reach the displayed LAN or Tailscale URL.
-- The URL is not `127.0.0.1` on the phone.
-- Tailscale or ZeroTier is online on both devices if you are away from home.
-- The Mac is awake. Display sleep is fine; real system sleep is not.
-- macOS firewall or network isolation is not blocking port `3000`.
-
-### Agent cannot access a file
-
-Check the current project. File tools are sandboxed around the selected project folder. Move the file into the project or create a project for the folder you want the agent to work in.
+- Do not expose the local gateway directly to the public internet.
+- Prefer Tailscale, ZeroTier, a trusted private network, or a carefully configured HTTPS reverse proxy for remote access.
+- Browser automation does not bypass login, CAPTCHA, payment, risk, or consent prompts.
+- Destructive commands, package installs, external runtimes, and permission-sensitive tools remain explicit permission boundaries.
+- Provider keys and local data stay on the machine unless a configured tool or provider call sends them out.
 
 ## Documentation
 
-- [Development Guide](docs/development.md)
-- [Architecture Spec](docs/forge_agent_v_2_architecture_spec.md)
-- [Native Apps](docs/native-apps.md)
-- [Blender MCP Quick Start](docs/blender-mcp-quickstart.md)
+- [Native apps](docs/native-apps.md)
+- [Release checklist](docs/release-checklist.md)
+- [Blender MCP quick start](docs/blender-mcp-quickstart.md)
+- [Architecture spec](docs/forge_agent_v_2_architecture_spec.md)
 
 ## License
 
-ForgeAgent is released under the [MIT License](LICENSE). Forks, modifications, private use, and commercial use are welcome. If you build on ForgeAgent or present it publicly, attribution is appreciated.
-
-## Project Status
-
-ForgeAgent is an early local-first product. It is already usable for real local workflows, but the surface area is large: macOS app, Web Console, Android app, Chrome extension, MCP, skills, browser automation, memory, and runtime recovery. Expect rapid changes.
-
-Contributions, bug reports, and real workflow reports are welcome.
+DeepSeek-Forge is released under the [MIT License](LICENSE). Forks, modifications, private use, and commercial use are welcome under the license terms.

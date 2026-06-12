@@ -9,10 +9,11 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@drawable/ic_forge_launcher"
-        android:label="ForgeAgent"
+        android:icon="@mipmap/deepseek_forge_icon"
+        android:label="DeepSeek-Forge"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:theme="@style/ForgeAgentTheme"
+        android:roundIcon="@mipmap/deepseek_forge_icon"
+        android:theme="@style/DeepSeekForgeTheme"
         android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"

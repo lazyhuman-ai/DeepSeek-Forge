@@ -15,7 +15,7 @@ struct WebConsoleView: NSViewRepresentable {
         view.uiDelegate = context.coordinator
         view.allowsBackForwardNavigationGestures = true
         context.coordinator.attach(view, baseURL: url)
-        view.load(URLRequest(url: url))
+        loadConsole(view, url: url)
         return view
     }
 
@@ -23,8 +23,27 @@ struct WebConsoleView: NSViewRepresentable {
         context.coordinator.attach(view, baseURL: url)
         if context.coordinator.lastReloadNonce != reloadNonce {
             context.coordinator.lastReloadNonce = reloadNonce
-            view.load(URLRequest(url: url))
+            loadConsole(view, url: url)
         }
+    }
+
+    private func loadConsole(_ view: WKWebView, url: URL) {
+        let cacheTypes: Set<String> = [
+            WKWebsiteDataTypeDiskCache,
+            WKWebsiteDataTypeMemoryCache,
+        ]
+        view.configuration.websiteDataStore.removeData(
+            ofTypes: cacheTypes,
+            modifiedSince: Date(timeIntervalSince1970: 0)
+        ) {
+            DispatchQueue.main.async {
+                view.load(consoleRequest(for: url))
+            }
+        }
+    }
+
+    private func consoleRequest(for url: URL) -> URLRequest {
+        URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -55,6 +74,24 @@ struct WebConsoleView: NSViewRepresentable {
                     name: .forgeOpenRemoteAccess,
                     object: nil
                 )
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(openSettings),
+                    name: .forgeOpenSettings,
+                    object: nil
+                )
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(openExtensions),
+                    name: .forgeOpenExtensions,
+                    object: nil
+                )
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(handleNativeCommand(_:)),
+                    name: .forgeNativeCommand,
+                    object: nil
+                )
             }
         }
 
@@ -69,7 +106,7 @@ struct WebConsoleView: NSViewRepresentable {
             windowFeatures: WKWindowFeatures
         ) -> WKWebView? {
             if let url = navigationAction.request.url {
-                if shouldOpenInsideForgeAgent(url) || url.scheme == "blob" {
+                if shouldOpenInsideDeepSeekForge(url) || url.scheme == "blob" {
                     webView.load(URLRequest(url: url))
                     return nil
                 }
@@ -86,7 +123,7 @@ struct WebConsoleView: NSViewRepresentable {
             completionHandler: @escaping @Sendable () -> Void
         ) {
             let alert = NSAlert()
-            alert.messageText = "ForgeAgent"
+            alert.messageText = "DeepSeek-Forge"
             alert.informativeText = message
             alert.addButton(withTitle: "OK")
             present(alert, for: webView) { _ in
@@ -102,7 +139,7 @@ struct WebConsoleView: NSViewRepresentable {
             completionHandler: @escaping @Sendable (Bool) -> Void
         ) {
             let alert = NSAlert()
-            alert.messageText = "ForgeAgent"
+            alert.messageText = "DeepSeek-Forge"
             alert.informativeText = message
             alert.addButton(withTitle: "OK")
             alert.addButton(withTitle: "Cancel")
@@ -120,7 +157,7 @@ struct WebConsoleView: NSViewRepresentable {
             completionHandler: @escaping @MainActor @Sendable (String?) -> Void
         ) {
             let alert = NSAlert()
-            alert.messageText = "ForgeAgent"
+            alert.messageText = "DeepSeek-Forge"
             alert.informativeText = prompt
             let field = NSTextField(string: defaultText ?? "")
             field.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
@@ -186,6 +223,23 @@ struct WebConsoleView: NSViewRepresentable {
             openRail("android")
         }
 
+        @objc private func openSettings() {
+            sendConsoleCommand("openSettings", fallbackQueryItems: [
+                URLQueryItem(name: "settings", value: "1"),
+            ])
+        }
+
+        @objc private func openExtensions() {
+            sendConsoleCommand("openExtensions", fallbackQueryItems: [
+                URLQueryItem(name: "view", value: "extensions"),
+            ])
+        }
+
+        @objc private func handleNativeCommand(_ notification: Notification) {
+            guard let action = notification.userInfo?["action"] as? String else { return }
+            sendConsoleCommand(action, fallbackQueryItems: [])
+        }
+
         private func openSession(_ sessionId: String) {
             guard
                 let webView,
@@ -208,7 +262,32 @@ struct WebConsoleView: NSViewRepresentable {
             webView.load(URLRequest(url: url))
         }
 
-        private func shouldOpenInsideForgeAgent(_ url: URL) -> Bool {
+        private func openConsole(with queryItems: [URLQueryItem]) {
+            guard
+                let webView,
+                let baseURL,
+                var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+            else { return }
+            components.queryItems = queryItems
+            guard let url = components.url else { return }
+            webView.load(URLRequest(url: url))
+        }
+
+        private func sendConsoleCommand(_ action: String, fallbackQueryItems: [URLQueryItem]) {
+            guard let webView else { return }
+            let payload: [String: Any] = ["action": action]
+            guard
+                let data = try? JSONSerialization.data(withJSONObject: payload),
+                let json = String(data: data, encoding: .utf8)
+            else { return }
+            let script = "window.dispatchEvent(new CustomEvent('forge-native-command', { detail: \(json) }));"
+            webView.evaluateJavaScript(script) { [weak self] _, error in
+                guard error != nil, !fallbackQueryItems.isEmpty else { return }
+                self?.openConsole(with: fallbackQueryItems)
+            }
+        }
+
+        private func shouldOpenInsideDeepSeekForge(_ url: URL) -> Bool {
             guard let baseURL else { return false }
             return url.scheme == baseURL.scheme &&
                 url.host == baseURL.host &&
@@ -224,8 +303,8 @@ struct WebConsoleView: NSViewRepresentable {
             panel.allowsMultipleSelection = false
             panel.prompt = canCreate ? "Create or Choose" : "Choose"
             panel.message = canCreate
-                ? "Create or choose a folder for this ForgeAgent project."
-                : "Choose a folder for this ForgeAgent project."
+                ? "Create or choose a folder for this DeepSeek-Forge project."
+                : "Choose a folder for this DeepSeek-Forge project."
             panel.begin { [weak self] response in
                 self?.sendNativeResponse(id: id, path: response == .OK ? panel.url?.path : nil)
             }

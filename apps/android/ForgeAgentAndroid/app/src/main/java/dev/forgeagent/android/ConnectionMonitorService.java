@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.os.IBinder;
 
@@ -40,7 +41,7 @@ public final class ConnectionMonitorService extends Service {
     private ConnectionStore connectionStore;
     private EndpointResolver endpointResolver;
     private volatile boolean connected;
-    private volatile String lastMessage = "Checking ForgeAgent...";
+    private volatile String lastMessage = "Checking DeepSeek-Forge...";
     private volatile boolean stopped;
     private final Set<String> mutedSessionIds = Collections.synchronizedSet(new HashSet<>());
 
@@ -50,7 +51,7 @@ public final class ConnectionMonitorService extends Service {
         connectionStore = new ConnectionStore(this);
         endpointResolver = new EndpointResolver(connectionStore);
         ensureChannels();
-        startForeground(CONNECTION_NOTIFICATION_ID, buildConnectionNotification("Checking ForgeAgent...", false));
+        startForeground(CONNECTION_NOTIFICATION_ID, buildConnectionNotification("Checking DeepSeek-Forge...", false));
         executor = Executors.newSingleThreadScheduledExecutor();
         executor.scheduleWithFixedDelay(this::pollHealth, 0, POLL_SECONDS, TimeUnit.SECONDS);
         eventExecutor = Executors.newSingleThreadExecutor();
@@ -107,8 +108,9 @@ public final class ConnectionMonitorService extends Service {
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, openIntent, flags);
         Notification.Builder builder = new Notification.Builder(this, CONNECTION_CHANNEL_ID);
         return builder
-            .setSmallIcon(R.drawable.ic_forge_notification)
-            .setContentTitle(isConnected ? "ForgeAgent connected" : "ForgeAgent waiting")
+            .setSmallIcon(R.drawable.deepseek_forge_icon)
+            .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.deepseek_forge_icon))
+            .setContentTitle(isConnected ? "DeepSeek-Forge connected" : "DeepSeek-Forge waiting")
             .setContentText(text)
             .setSubText(Instant.now().toString())
             .setContentIntent(pendingIntent)
@@ -128,7 +130,8 @@ public final class ConnectionMonitorService extends Service {
         PendingIntent pendingIntent = PendingIntent.getActivity(this, (int) (seq % 100_000), openIntent, flags);
         Notification.Builder builder = new Notification.Builder(this, ACTIVITY_CHANNEL_ID);
         return builder
-            .setSmallIcon(R.drawable.ic_forge_notification)
+            .setSmallIcon(R.drawable.deepseek_forge_icon)
+            .setLargeIcon(BitmapFactory.decodeResource(getResources(), R.drawable.deepseek_forge_icon))
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(new Notification.BigTextStyle().bigText(text))
@@ -145,19 +148,19 @@ public final class ConnectionMonitorService extends Service {
         if (manager.getNotificationChannel(CONNECTION_CHANNEL_ID) == null) {
             NotificationChannel channel = new NotificationChannel(
                 CONNECTION_CHANNEL_ID,
-                "ForgeAgent connection",
+                "DeepSeek-Forge connection",
                 NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("Keeps Android paired with the ForgeAgent desktop service.");
+            channel.setDescription("Keeps Android paired with the DeepSeek-Forge desktop service.");
             manager.createNotificationChannel(channel);
         }
         if (manager.getNotificationChannel(ACTIVITY_CHANNEL_ID) == null) {
             NotificationChannel channel = new NotificationChannel(
                 ACTIVITY_CHANNEL_ID,
-                "ForgeAgent activity",
+                "DeepSeek-Forge activity",
                 NotificationManager.IMPORTANCE_DEFAULT
             );
-            channel.setDescription("Replies, approval requests, and blocked sessions from ForgeAgent.");
+            channel.setDescription("Replies, approval requests, and blocked sessions from DeepSeek-Forge.");
             manager.createNotificationChannel(channel);
         }
     }
@@ -269,16 +272,16 @@ public final class ConnectionMonitorService extends Service {
     private NotificationPayload notificationPayload(String sessionId, JSONObject event) {
         String type = event.optString("type", "");
         if ("permission_request".equals(type)) {
-            return new NotificationPayload("ForgeAgent needs approval", truncate(event.optString("message", "A tool needs approval.")));
+            return new NotificationPayload("DeepSeek-Forge needs approval", truncate(event.optString("message", "A tool needs approval.")));
         }
         if ("mcp_elicitation_request".equals(type)) {
-            return new NotificationPayload("ForgeAgent needs input", truncate(event.optString("message", "A connected MCP server needs input.")));
+            return new NotificationPayload("DeepSeek-Forge needs input", truncate(event.optString("message", "A connected MCP server needs input.")));
         }
         if ("assistant_message".equals(type)) {
-            return new NotificationPayload("ForgeAgent replied", truncate(stripMarkup(event.optString("text", "Open ForgeAgent to read the reply."))));
+            return new NotificationPayload("DeepSeek-Forge replied", truncate(stripMarkup(event.optString("text", "Open DeepSeek-Forge to read the reply."))));
         }
         if ("runtime_event".equals(type)) {
-            return new NotificationPayload("Session blocked", truncate(event.optString("message", "Open ForgeAgent to review the blocked session.")));
+            return new NotificationPayload("Session blocked", truncate(event.optString("message", "Open DeepSeek-Forge to review the blocked session.")));
         }
         return null;
     }
@@ -363,7 +366,7 @@ public final class ConnectionMonitorService extends Service {
         try {
             return new URL(value).getHost();
         } catch (Exception ignored) {
-            return value == null || value.isEmpty() ? "ForgeAgent" : value;
+            return value == null || value.isEmpty() ? "DeepSeek-Forge" : value;
         }
     }
 

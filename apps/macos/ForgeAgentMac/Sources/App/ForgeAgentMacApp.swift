@@ -6,7 +6,7 @@ struct ForgeAgentMacApp: App {
     @StateObject private var notifications = NativeNotificationController()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("DeepSeek-Forge") {
             ContentView()
                 .environmentObject(service)
                 .environmentObject(notifications)
@@ -20,7 +20,19 @@ struct ForgeAgentMacApp: App {
         }
         .windowStyle(.titleBar)
         .commands {
-            CommandMenu("ForgeAgent") {
+            CommandMenu("DeepSeek-Forge") {
+                Button("Extensions") {
+                    NotificationCenter.default.post(name: .forgeOpenExtensions, object: nil)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+
+                Button("Settings…") {
+                    NotificationCenter.default.post(name: .forgeOpenSettings, object: nil)
+                }
+                .keyboardShortcut(",", modifiers: [.command])
+
+                Divider()
+
                 Button("Open Console in Browser") {
                     service.openConsoleInBrowser()
                 }
@@ -42,6 +54,23 @@ struct ForgeAgentMacApp: App {
                 Button("Remote Access") {
                     NotificationCenter.default.post(name: .forgeOpenRemoteAccess, object: nil)
                 }
+
+                Divider()
+
+                Button("Increase Console Text Size") {
+                    NotificationCenter.default.post(name: .forgeNativeCommand, object: nil, userInfo: ["action": "increaseFont"])
+                }
+                .keyboardShortcut("+", modifiers: [.command])
+
+                Button("Decrease Console Text Size") {
+                    NotificationCenter.default.post(name: .forgeNativeCommand, object: nil, userInfo: ["action": "decreaseFont"])
+                }
+                .keyboardShortcut("-", modifiers: [.command])
+
+                Button("Toggle Console Theme") {
+                    NotificationCenter.default.post(name: .forgeNativeCommand, object: nil, userInfo: ["action": "toggleTheme"])
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
             }
         }
     }

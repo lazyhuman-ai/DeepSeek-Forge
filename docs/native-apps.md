@@ -1,6 +1,6 @@
-# ForgeAgent Native Apps
+# DeepSeek-Forge Native Apps
 
-ForgeAgent native apps are product shells around the same Forge Core and Web
+DeepSeek-Forge native apps are product shells around the same Forge Core and Web
 Console.
 
 - macOS: `apps/macos/ForgeAgentMac`
@@ -8,13 +8,13 @@ Console.
 
 ## macOS
 
-The macOS app is the local ForgeAgent body. It starts or reuses the Core
+The macOS app is the local DeepSeek-Forge body. It starts or reuses the Core
 LaunchAgent and renders the existing Web Console in WKWebView.
 
 ```sh
 npm run macos:build
 npm run macos:package
-open apps/macos/ForgeAgentMac/dist/ForgeAgent.app
+open apps/macos/ForgeAgentMac/dist/DeepSeek-Forge.app
 ```
 
 The app listens on `0.0.0.0:3000` for private-network device access, while all
@@ -47,7 +47,7 @@ to.
 
 ## Notifications
 
-ForgeAgent notification facts still come from durable thread/system events.
+DeepSeek-Forge notification facts still come from durable thread/system events.
 Native apps only consume those events:
 
 - macOS: the app process requests notification permission and listens to Core
@@ -69,7 +69,7 @@ Android SDK.
 
 ## Design Rule
 
-Do not duplicate ForgeAgent UI state in native clients. The Web Console remains
+Do not duplicate DeepSeek-Forge UI state in native clients. The Web Console remains
 the display source for messages, rich text, HTML, permissions, files, branches,
 usage, MCP, skills, memory, and Webridge. Native code should only handle app
 shell concerns: startup, pairing, WebView, menus, logs, and diagnostics.

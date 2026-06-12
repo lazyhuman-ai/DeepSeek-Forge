@@ -1,7 +1,7 @@
-# ForgeAgent Release Checklist
+# DeepSeek-Forge Release Checklist
 
 This checklist is for preparing a local-first beta release from this repository.
-It assumes the release is aimed at individual users who run ForgeAgent on their own Mac.
+It assumes the release is aimed at individual users who run DeepSeek-Forge on their own Mac.
 
 ## 1. Start Clean
 
@@ -52,20 +52,20 @@ Artifacts are written to:
 
 Expected files:
 
-- `ForgeAgent-<version>-macos-arm64.zip`
-- `ForgeAgent-<version>-android-debug.apk`
+- `DeepSeek-Forge-<version>-macos-arm64.zip`
+- `DeepSeek-Forge-<version>-android-debug.apk`
 - `ForgeWebridge-<version>.zip`
 - `release-manifest.json`
 - `SHA256SUMS`
 
 ## 4. Important Distribution Notes
 
-ForgeAgent is currently a local-first beta distribution.
+DeepSeek-Forge is currently a local-first beta distribution.
 
 - macOS artifact is an unsigned beta `.app` zip unless you sign and notarize it yourself.
 - Android artifact is a debug APK for sideload testing unless you create a signed release APK or AAB.
 - ForgeWebridge is packaged for local extension loading unless you publish it through the Chrome Web Store.
-- ForgeAgent does not host a cloud relay. Remote mobile access is private-network first, usually Tailscale.
+- DeepSeek-Forge does not host a cloud relay. Remote mobile access is private-network first, usually Tailscale.
 - Users still need their own provider key, usually DeepSeek.
 
 ## 5. Manual Smoke Before Sharing
@@ -73,7 +73,7 @@ ForgeAgent is currently a local-first beta distribution.
 On a clean Mac account or a disposable test user:
 
 1. Unzip the macOS artifact.
-2. Open `ForgeAgent.app`.
+2. Open `DeepSeek-Forge.app`.
 3. Configure DeepSeek in the Web Console.
 4. Create a session and send `Who are you?`.
 5. Open **Pair Mobile** and verify the QR panel does not blank.

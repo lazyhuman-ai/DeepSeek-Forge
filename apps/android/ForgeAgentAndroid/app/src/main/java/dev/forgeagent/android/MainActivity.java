@@ -22,6 +22,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.view.WindowInsets;
 import android.webkit.JavascriptInterface;
+import android.webkit.ConsoleMessage;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -47,17 +48,20 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
-    private static final String TAG = "ForgeAgentAndroid";
+    private static final String TAG = "DeepSeekForgeAndroid";
     static final String PREFS = "forgeagent";
     static final String PREF_BASE_URL = "baseUrl";
     static final String PREF_TOKEN = "token";
     static final String PREF_LAST_NOTIFIED_SEQ = "lastNotifiedSeq";
     static final String PREF_LAST_EVENT_SEQ = "lastEventSeq";
     static final String PREF_ACTIVITY_NOTIFICATIONS = "activityNotifications";
+    static final String PREF_CONSOLE_FONT_ZOOM = "consoleFontZoom";
+    static final String PREF_CONSOLE_DARK_MODE = "consoleDarkMode";
     static final String EXTRA_SELECT_SESSION_ID = "dev.forgeagent.android.SELECT_SESSION_ID";
 
     private static final int TEXT = Color.rgb(55, 53, 47);
@@ -65,6 +69,9 @@ public final class MainActivity extends Activity {
     private static final int BORDER = Color.rgb(220, 218, 214);
     private static final int SURFACE = Color.rgb(247, 247, 245);
     private static final int ORANGE = Color.rgb(191, 116, 25);
+    private static final int CONSOLE_FONT_ZOOM_MIN = 90;
+    private static final int CONSOLE_FONT_ZOOM_MAX = 116;
+    private static final int CONSOLE_FONT_ZOOM_STEP = 5;
     private static final int FILE_CHOOSER_REQUEST = 42;
     private static final int QR_SCAN_REQUEST = 43;
 
@@ -83,11 +90,10 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().setStatusBarColor(Color.WHITE);
-        getWindow().setNavigationBarColor(Color.WHITE);
         connectionStore = new ConnectionStore(this);
         endpointResolver = new EndpointResolver(connectionStore);
         root = new FrameLayout(this);
+        applyNativeChrome();
         applySystemBarInsets(root);
         setContentView(root);
         requestNotificationPermissionIfNeeded();
@@ -145,11 +151,11 @@ public final class MainActivity extends Activity {
         try {
             uri = Uri.parse(contents);
         } catch (Exception ex) {
-            showError("This QR code is not a ForgeAgent pairing link.");
+            showError("This QR code is not a DeepSeek-Forge pairing link.");
             return;
         }
         if (!isPairUri(uri)) {
-            showError("This QR code is not a ForgeAgent pairing link. Open Pair Mobile on the Mac and scan that QR code.");
+            showError("This QR code is not a DeepSeek-Forge pairing link. Open Pair Mobile on the Mac and scan that QR code.");
             return;
         }
         pairFromUri(uri);
@@ -209,8 +215,10 @@ public final class MainActivity extends Activity {
         panel.setPadding(dp(22), dp(34), dp(22), dp(26));
         scroll.addView(panel, match());
 
-        TextView brand = text("ForgeAgent", 42, TEXT);
-        brand.setTypeface(Typeface.create("serif", Typeface.BOLD));
+        TextView brand = text("DeepSeek-Forge", 34, TEXT);
+        brand.setGravity(Gravity.CENTER);
+        brand.setSingleLine(true);
+        brand.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
         panel.addView(brand, wrap());
 
         TextView title = text("Choose a desktop connection", 18, TEXT);
@@ -219,7 +227,7 @@ public final class MainActivity extends Activity {
         titleParams.setMargins(0, dp(18), 0, dp(6));
         panel.addView(title, titleParams);
 
-        TextView hint = text("Android connects to ForgeAgent Core on your Mac. For away-from-home use, set up free Tailscale on both devices; ForgeAgent will save the Tailscale and local addresses from pairing.", 13, MUTED);
+        TextView hint = text("Android connects to DeepSeek-Forge Core on your Mac. For away-from-home use, set up free Tailscale on both devices; DeepSeek-Forge will save the Tailscale and local addresses from pairing.", 13, MUTED);
         hint.setLineSpacing(dp(3), 1.0f);
         LinearLayout.LayoutParams hintParams = fullWidth();
         hintParams.setMargins(0, 0, 0, dp(18));
@@ -274,7 +282,7 @@ public final class MainActivity extends Activity {
         row.setPadding(dp(16), dp(14), dp(16), dp(14));
         row.setBackground(rounded(Color.WHITE, BORDER, 12));
 
-        TextView name = text(connection.name == null || connection.name.isEmpty() ? "ForgeAgent Desktop" : connection.name, 16, TEXT);
+        TextView name = text(connection.name == null || connection.name.isEmpty() ? "DeepSeek-Forge Desktop" : connection.name, 16, TEXT);
         name.setTypeface(Typeface.DEFAULT_BOLD);
         row.addView(name, fullWidth());
 
@@ -354,11 +362,13 @@ public final class MainActivity extends Activity {
         panel.setPadding(dp(24), dp(44), dp(24), dp(28));
         scroll.addView(panel, match());
 
-        TextView brand = text("ForgeAgent", 46, TEXT);
-        brand.setTypeface(Typeface.create("serif", Typeface.BOLD));
+        TextView brand = text("DeepSeek-Forge", 34, TEXT);
+        brand.setGravity(Gravity.CENTER);
+        brand.setSingleLine(true);
+        brand.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
         panel.addView(brand, wrap());
 
-        TextView copy = text("Connect this phone to ForgeAgent running on your Mac.", 15, MUTED);
+        TextView copy = text("Connect this phone to DeepSeek-Forge running on your Mac.", 15, MUTED);
         copy.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams copyParams = fullWidth();
         copyParams.setMargins(0, dp(10), 0, dp(28));
@@ -433,8 +443,10 @@ public final class MainActivity extends Activity {
         panel.setPadding(dp(24), dp(64), dp(24), dp(28));
         scroll.addView(panel, match());
 
-        TextView brand = text("ForgeAgent", 42, TEXT);
-        brand.setTypeface(Typeface.create("serif", Typeface.BOLD));
+        TextView brand = text("DeepSeek-Forge", 34, TEXT);
+        brand.setGravity(Gravity.CENTER);
+        brand.setSingleLine(true);
+        brand.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
         panel.addView(brand, wrap());
 
         TextView title = text("Tailscale is needed on this phone", 24, TEXT);
@@ -563,7 +575,8 @@ public final class MainActivity extends Activity {
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
         settings.setMediaPlaybackRequiresUserGesture(false);
-        settings.setUserAgentString(settings.getUserAgentString() + " ForgeAgentAndroid/1");
+        applyConsolePreferencesToWebSettings(settings);
+        settings.setUserAgentString(settings.getUserAgentString() + " DeepSeekForgeAndroid/1");
         webView.addJavascriptInterface(new AndroidBridge(), "forgeAndroid");
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -581,6 +594,7 @@ public final class MainActivity extends Activity {
                     view.evaluateJavascript(script, ignored -> view.postDelayed(() -> view.loadUrl(resolvedBaseUrl), 150));
                     return;
                 }
+                syncConsolePreferencesToWeb(view);
             }
 
             @Override
@@ -605,13 +619,21 @@ public final class MainActivity extends Activity {
                 if (request.isForMainFrame()) {
                     String message = resourceError != null
                         ? resourceError.getDescription().toString()
-                        : "Cannot reach ForgeAgent.";
+                        : "Cannot reach DeepSeek-Forge.";
                     Log.e(TAG, "WebView main-frame error: " + message);
                     renderOffline(activeConnection, message);
                 }
             }
         });
         webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(ConsoleMessage message) {
+                if (message != null) {
+                    Log.d(TAG, "WebView console " + message.messageLevel() + ": " + message.message() + " (" + message.sourceId() + ":" + message.lineNumber() + ")");
+                }
+                return super.onConsoleMessage(message);
+            }
+
             @Override
             public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (filePathCallback != null) filePathCallback.onReceiveValue(null);
@@ -626,18 +648,7 @@ public final class MainActivity extends Activity {
                 return true;
             }
         });
-        addConnectionOverlayButton();
         loadConsole();
-    }
-
-    private void addConnectionOverlayButton() {
-        Button switcher = button("●", false);
-        switcher.setTextSize(18);
-        switcher.setTextColor(Color.rgb(52, 125, 72));
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dp(42), dp(42), Gravity.TOP | Gravity.RIGHT);
-        params.setMargins(0, dp(10), dp(12), 0);
-        root.addView(switcher, params);
-        switcher.setOnClickListener(v -> showConnectionSwitcher());
     }
 
     private void renderOffline(ForgeConnection connection, String message) {
@@ -656,7 +667,7 @@ public final class MainActivity extends Activity {
             && connection.displayEndpoint() != null
             && TailscaleSupport.isTailscaleEndpoint(connection.displayEndpoint())
             && !TailscaleSupport.deviceAppearsOnTailscale();
-        String name = connection == null || connection.name == null || connection.name.isEmpty() ? "ForgeAgent Desktop" : connection.name;
+        String name = connection == null || connection.name == null || connection.name.isEmpty() ? "DeepSeek-Forge Desktop" : connection.name;
         TextView title = text(tailscaleMissing ? "Connect Tailscale on this phone" : name + " is offline", 28, TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setGravity(Gravity.CENTER);
@@ -721,7 +732,7 @@ public final class MainActivity extends Activity {
             try {
                 JSONObject body = new JSONObject();
                 body.put("code", code.trim());
-                body.put("name", "ForgeAgent Android");
+                body.put("name", "DeepSeek-Forge Android");
                 body.put("kind", "android");
                 JSONObject response = parseJsonObject(requestAt(base, "", "POST", "/auth/pair", body), "pairing response");
                 ForgeConnection connection = connectionFromPairResponse(base, response);
@@ -754,7 +765,7 @@ public final class MainActivity extends Activity {
 
     private String request(String method, String path, JSONObject body) throws Exception {
         if (activeConnection == null || resolvedBaseUrl == null || resolvedBaseUrl.isEmpty()) {
-            throw new Exception("No active ForgeAgent connection.");
+            throw new Exception("No active DeepSeek-Forge connection.");
         }
         return requestAt(resolvedBaseUrl, activeConnection.token, method, path, body);
     }
@@ -823,7 +834,7 @@ public final class MainActivity extends Activity {
     private JSONObject parseJsonObject(String text, String label) throws Exception {
         String trimmed = text == null ? "" : text.trim();
         if (!trimmed.startsWith("{")) {
-            throw new Exception("The " + label + " was not ForgeAgent JSON. Make sure the Mac app is updated and the pairing QR points to the ForgeAgent gateway, then retry.");
+            throw new Exception("The " + label + " was not DeepSeek-Forge JSON. Make sure the Mac app is updated and the pairing QR points to the DeepSeek-Forge gateway, then retry.");
         }
         return new JSONObject(trimmed);
     }
@@ -859,7 +870,7 @@ public final class MainActivity extends Activity {
         LinearLayout panel = bottomPanel();
         dialog.setContentView(panel);
 
-        TextView title = text("ForgeAgent Connections", 18, TEXT);
+        TextView title = text("DeepSeek-Forge Connections", 18, TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         panel.addView(title, fullWidth());
 
@@ -867,6 +878,24 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams hintParams = fullWidth();
         hintParams.setMargins(0, dp(8), 0, dp(14));
         panel.addView(hint, hintParams);
+
+        Button extensions = button("Open Extensions", false);
+        LinearLayout.LayoutParams extensionsParams = fullWidth();
+        extensionsParams.setMargins(0, dp(6), 0, 0);
+        panel.addView(extensions, extensionsParams);
+        extensions.setOnClickListener(v -> {
+            dialog.dismiss();
+            sendConsoleCommand("openExtensions");
+        });
+
+        Button settings = button("Open Settings", false);
+        LinearLayout.LayoutParams settingsParams = fullWidth();
+        settingsParams.setMargins(0, dp(10), 0, dp(8));
+        panel.addView(settings, settingsParams);
+        settings.setOnClickListener(v -> {
+            dialog.dismiss();
+            sendConsoleCommand("openSettings");
+        });
 
         for (ForgeConnection connection : connectionStore.list()) {
             Button item = button(connection.name + "\n" + statusLabel(connection), connection.connectionId.equals(connectionStore.activeId()));
@@ -944,7 +973,7 @@ public final class MainActivity extends Activity {
         save.setOnClickListener(v -> {
             String url = trimTrailingSlash(urlInput.getText().toString().trim());
             if (url.isEmpty()) {
-                feedback.setText("Enter a ForgeAgent URL.");
+                feedback.setText("Enter a DeepSeek-Forge URL.");
                 return;
             }
             connection.addEndpoint(url);
@@ -1002,10 +1031,103 @@ public final class MainActivity extends Activity {
         return panel;
     }
 
+    private int consoleFontZoom() {
+        int zoom = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(PREF_CONSOLE_FONT_ZOOM, 100);
+        return Math.max(CONSOLE_FONT_ZOOM_MIN, Math.min(CONSOLE_FONT_ZOOM_MAX, zoom));
+    }
+
+    private void setConsoleFontZoom(int zoom) {
+        getSharedPreferences(PREFS, MODE_PRIVATE)
+            .edit()
+            .putInt(PREF_CONSOLE_FONT_ZOOM, Math.max(CONSOLE_FONT_ZOOM_MIN, Math.min(CONSOLE_FONT_ZOOM_MAX, zoom)))
+            .apply();
+    }
+
+    private boolean consoleDarkMode() {
+        return getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(PREF_CONSOLE_DARK_MODE, false);
+    }
+
+    private void setConsoleDarkMode(boolean enabled) {
+        getSharedPreferences(PREFS, MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_CONSOLE_DARK_MODE, enabled)
+            .apply();
+    }
+
+    private void adjustConsoleFontZoom(int delta) {
+        setConsoleFontZoom(consoleFontZoom() + delta);
+        applyConsolePreferencesToWeb();
+    }
+
+    private void applyNativeChrome() {
+        boolean dark = consoleDarkMode();
+        getWindow().setStatusBarColor(dark ? Color.rgb(17, 19, 22) : Color.WHITE);
+        getWindow().setNavigationBarColor(dark ? Color.rgb(17, 19, 22) : Color.WHITE);
+        int flags = getWindow().getDecorView().getSystemUiVisibility();
+        if (dark) {
+            flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            }
+        } else {
+            flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            }
+        }
+        getWindow().getDecorView().setSystemUiVisibility(flags);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void applyConsolePreferencesToWebSettings(WebSettings settings) {
+        settings.setTextZoom(consoleFontZoom());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            settings.setForceDark(consoleDarkMode() ? WebSettings.FORCE_DARK_ON : WebSettings.FORCE_DARK_OFF);
+        }
+    }
+
+    private void applyConsolePreferencesToWeb() {
+        if (webView == null) return;
+        applyConsolePreferencesToWebSettings(webView.getSettings());
+        syncConsolePreferencesToWeb(webView);
+    }
+
+    private void syncConsolePreferencesToWeb(WebView view) {
+        if (view == null) return;
+        String theme = consoleDarkMode() ? "dark" : "light";
+        String scale = String.format(Locale.US, "%.2f", consoleFontZoom() / 100.0f);
+        String script = "(function(){"
+            + "localStorage.setItem('forgeagent.web.fontScale'," + JSONObject.quote(scale) + ");"
+            + "localStorage.setItem('forgeagent.web.theme'," + JSONObject.quote(theme) + ");"
+            + "document.documentElement.dataset.forgeTheme=" + JSONObject.quote(theme) + ";"
+            + "document.documentElement.classList.remove('forge-native-shell');"
+            + "window.dispatchEvent(new CustomEvent('forge-native-appearance',{detail:{fontScale:" + scale + ",theme:" + JSONObject.quote(theme) + "}}));"
+            + "})();";
+        view.evaluateJavascript(script, null);
+    }
+
+    private void sendConsoleCommand(String action) {
+        if (webView == null) return;
+        String script = "window.dispatchEvent(new CustomEvent('forge-native-command',{detail:{action:"
+            + JSONObject.quote(action)
+            + "}}));";
+        webView.evaluateJavascript(script, null);
+    }
+
     private final class AndroidBridge {
         @JavascriptInterface
         public void openConnectionSwitcher() {
             runOnUiThread(MainActivity.this::showConnectionSwitcher);
+        }
+
+        @JavascriptInterface
+        public void openSettings() {
+            runOnUiThread(() -> sendConsoleCommand("openSettings"));
+        }
+
+        @JavascriptInterface
+        public void openExtensions() {
+            runOnUiThread(() -> sendConsoleCommand("openExtensions"));
         }
     }
 

@@ -1,6 +1,6 @@
-# ForgeAgent macOS
+# DeepSeek-Forge macOS
 
-ForgeAgent macOS is the desktop body for ForgeAgent.
+DeepSeek-Forge macOS is the desktop body for DeepSeek-Forge.
 
 It is not a rewritten chat client. The app starts or reuses the local Forge Core
 service, keeps it alive through LaunchAgent, and displays the same Web Console
@@ -11,12 +11,12 @@ inside WKWebView.
 ```sh
 npm run macos:build
 npm run macos:package
-open apps/macos/ForgeAgentMac/dist/ForgeAgent.app
+open apps/macos/ForgeAgentMac/dist/DeepSeek-Forge.app
 ```
 
 The packaged app bundles:
 
-- ForgeAgent Core source/runtime files
+- DeepSeek-Forge Core source/runtime files
 - `web/dist`
 - `node_modules`
 - a local Node binary
@@ -40,7 +40,7 @@ network loss, or power loss will still interrupt remote Android operation.
 
 ## User Flow
 
-1. Open `ForgeAgent.app`.
+1. Open `DeepSeek-Forge.app`.
 2. Configure DeepSeek in the Web Console if needed.
 3. Use the same console experience as the browser version.
 4. Use **Remote Access** from the app menu, or **Pair Mobile** from the Web Console rail, to connect a phone.

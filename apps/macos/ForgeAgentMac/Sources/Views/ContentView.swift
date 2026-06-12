@@ -11,11 +11,11 @@ struct ContentView: View {
                 WebConsoleView(url: service.consoleURL, reloadNonce: service.reloadNonce)
                     .ignoresSafeArea()
             case .starting:
-                LaunchStateView(title: "Starting ForgeAgent", message: "Preparing the local Core service…", progress: true)
+                LaunchStateView(title: "Starting DeepSeek-Forge", message: "Preparing the local Core service…", progress: true)
             case .restarting:
-                LaunchStateView(title: "Restarting ForgeAgent", message: "Core is restarting. The console will reload automatically.", progress: true)
+                LaunchStateView(title: "Restarting DeepSeek-Forge", message: "Core is restarting. The console will reload automatically.", progress: true)
             case .degraded(let message):
-                LaunchStateView(title: "ForgeAgent needs attention", message: message, progress: false)
+                LaunchStateView(title: "DeepSeek-Forge needs attention", message: message, progress: false)
             }
         }
         .onChange(of: service.status) { _, status in
@@ -36,7 +36,7 @@ struct LaunchStateView: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            Text("ForgeAgent")
+            Text("DeepSeek-Forge")
                 .font(.system(size: 46, weight: .semibold, design: .serif))
             if progress {
                 ProgressView()
@@ -63,5 +63,8 @@ struct LaunchStateView: View {
 
 extension Notification.Name {
     static let forgeOpenRemoteAccess = Notification.Name("forgeOpenRemoteAccess")
+    static let forgeOpenSettings = Notification.Name("forgeOpenSettings")
+    static let forgeOpenExtensions = Notification.Name("forgeOpenExtensions")
     static let forgeSelectSession = Notification.Name("forgeSelectSession")
+    static let forgeNativeCommand = Notification.Name("forgeNativeCommand")
 }

@@ -1,7 +1,7 @@
 {
-  "name": "ForgeAgent",
-  "short_name": "ForgeAgent",
-  "description": "Private remote console for ForgeAgent running on your Mac.",
+  "name": "DeepSeek-Forge",
+  "short_name": "DeepSeek-Forge",
+  "description": "Private DeepSeek-native agent console running on your Mac.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -10,16 +10,16 @@
   "orientation": "any",
   "icons": [
     {
-      "src": "/forgeagent-hero.png",
-      "sizes": "1600x900",
+      "src": "/icon.png",
+      "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/forge-agent-img.png",
-      "sizes": "2172x724",
+      "src": "/icon.png",
+      "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "maskable"
     }
   ]
 }
